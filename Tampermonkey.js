@@ -944,7 +944,7 @@
         const rawUrl = String(image?.url || image?.download_url || '').trim();
         const label = markdownLinkLabel(image?.dispositionLabel || 'image');
         if (!/^https:\/\//i.test(rawUrl)) return label;
-        const markdownUrl = rawUrl.replace(/[\s\\()<>"]/g, character => encodeURIComponent(character));
+        const markdownUrl = rawUrl.replace(/[\s\\()<>"]/g, character => character === '(' ? '%28' : character === ')' ? '%29' : encodeURIComponent(character));
         return `[${label} (external image)](${markdownUrl})`;
     }
 
