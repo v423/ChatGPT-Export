@@ -611,7 +611,7 @@
       function safeUrl(url) {
         const value = String(url || "").trim();
         if (!value) return "";
-        if (/^(https?:|mailto:|blob:|data:image\/)/i.test(value)) return value;
+        if (/^(https?:|mailto:|blob:)/i.test(value)) return value;
         return "";
       }
 

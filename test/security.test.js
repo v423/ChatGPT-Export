@@ -47,6 +47,14 @@ const safeImageUrl = new Function(reader.slice(imageHelperStart, imageHelperEnd)
 assert.equal(safeImageUrl('https://tracker.example/pixel.png'), '', 'remote images must not load automatically in the offline reader');
 assert.equal(safeImageUrl('blob:https://localhost/example'), 'blob:https://localhost/example');
 assert.equal(safeImageUrl('data:image/png;base64,AAAA'), 'data:image/png;base64,AAAA');
+assert.equal(safeImageUrl('data:image/svg+xml,<svg></svg>'), '', 'active SVG data URLs must not be embedded as images');
+
+const linkHelperStart = reader.indexOf('      function safeUrl(url) {');
+const linkHelperEnd = reader.indexOf('      function safeImageUrl(url)', linkHelperStart);
+assert.ok(linkHelperStart >= 0 && linkHelperEnd > linkHelperStart, 'link URL guard should exist');
+const safeUrl = new Function(reader.slice(linkHelperStart, linkHelperEnd) + '; return safeUrl;')();
+assert.equal(safeUrl('data:image/svg+xml,<svg></svg>'), '', 'data URLs must not be allowed as clickable links');
+assert.equal(safeUrl('javascript:alert(1)'), '', 'script URLs must be rejected');
 
 const normalizeStart = reader.indexOf('      function normalizeZipPath(path) {');
 const normalizeEnd = reader.indexOf('      function dirname(path)', normalizeStart);

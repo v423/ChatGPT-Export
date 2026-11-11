@@ -315,9 +315,18 @@ https://github.com/nodeca/pako/blob/main/LICENSE
                 const requestUrl = typeof Request !== 'undefined' && resource instanceof Request ? resource.url : String(resource);
                 const url = new URL(requestUrl, location.href);
                 if (url.origin === location.origin && url.pathname.startsWith('/backend-api/')) {
-                    const headers = new Headers(typeof Request !== 'undefined' && resource instanceof Request ? resource.headers : undefined);
-                    if (options?.headers) new Headers(options.headers).forEach((value, name) => headers.set(name, value));
-                    const id = headers.get('ChatGPT-Account-Id');
+                    const headerSource = options?.headers ?? (
+                        typeof Request !== 'undefined' && resource instanceof Request ? resource.headers : null
+                    );
+                    let id = null;
+                    if (headerSource instanceof Headers) {
+                        id = headerSource.get('ChatGPT-Account-Id');
+                    } else if (Array.isArray(headerSource)) {
+                        const pair = headerSource.find(([name]) => String(name).toLowerCase() === 'chatgpt-account-id');
+                        id = pair?.[1] || null;
+                    } else if (headerSource && typeof headerSource === 'object') {
+                        id = headerSource['ChatGPT-Account-Id'] || headerSource['chatgpt-account-id'] || null;
+                    }
                     if (id) capturedWorkspaceIds.add(id);
                 }
             } catch (_) {}
