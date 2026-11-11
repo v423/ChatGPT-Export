@@ -8,6 +8,7 @@ const jszip = fs.readFileSync(path.join(__dirname, '..', 'reader/vendor/jszip.mi
 
 assert.doesNotMatch(tm, /^\s*\/\/\s*@require\s+https?:\/\//m, 'userscript must not load executable code from a remote CDN');
 assert.ok(tm.includes(jszip.trim()), 'userscript should embed the same vendored JSZip source used by the reader');
+assert.match(tm, /function markdownExternalImageLink\(image\)/, 'failed image downloads should keep a link to the original HTTPS asset');
 assert.match(tm, /function installBundledJSZip\(\)/, 'bundled JSZip should be isolated from host-page module loaders');
 assert.doesNotMatch(tm, /XMLHttpRequest\.prototype\.open|this\.getRequestHeader/, 'broken XHR header interception must be removed');
 assert.doesNotMatch(tm, /function tryCaptureToken/, 'the fetch observer must not capture bearer tokens');
@@ -49,6 +50,7 @@ assert.equal(safeImageUrl('https://tracker.example/pixel.png'), '', 'remote imag
 assert.equal(safeImageUrl('blob:https://localhost/example'), 'blob:https://localhost/example');
 assert.equal(safeImageUrl('data:image/png;base64,AAAA'), 'data:image/png;base64,AAAA');
 assert.equal(safeImageUrl('data:image/svg+xml,<svg></svg>'), '', 'active SVG data URLs must not be embedded as images');
+assert.match(reader, /image\.localUrl \|\| image\.url \|\| image\.download_url/, 'reader should retain a clickable fallback for images that were not downloaded');
 
 const linkHelperStart = reader.indexOf('      function safeUrl(url) {');
 const linkHelperEnd = reader.indexOf('      function safeImageUrl(url)', linkHelperStart);

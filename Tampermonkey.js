@@ -940,6 +940,14 @@
         return String(value || 'file').replace(/([\\\[\]])/g, '\\$1');
     }
 
+    function markdownExternalImageLink(image) {
+        const rawUrl = String(image?.url || image?.download_url || '').trim();
+        const label = markdownLinkLabel(image?.dispositionLabel || 'image');
+        if (!/^https:\/\//i.test(rawUrl)) return label;
+        const markdownUrl = rawUrl.replace(/[\\s\\\\()<>\"]/g, character => encodeURIComponent(character));
+        return `[${label} (external image)](${markdownUrl})`;
+    }
+
     function markdownPath(path) {
         return String(path || '')
             .split('/')
@@ -1012,13 +1020,13 @@
             if (imageFiles && Array.isArray(msg.images) && msg.images.length > 0) {
                 msg.images.forEach(img => {
                     const entry = imageFiles.get(img.asset_pointer);
-                    if (!entry) return;
                     const placeholder = `<!-- image:${img.asset_pointer} -->`;
-                    const mdImg = `\n\n![${entry.dispositionLabel || 'image'}](images/${entry.filename})\n`;
-                    if (body.includes(placeholder)) {
-                        body = body.split(placeholder).join(mdImg);
-                        referenced.add(img.asset_pointer);
-                    }
+                    if (!body.includes(placeholder)) return;
+                    const replacement = entry
+                        ? `\n\n![${entry.dispositionLabel || 'image'}](images/${entry.filename})\n`
+                        : `\n\n${markdownExternalImageLink(img)}\n`;
+                    body = body.split(placeholder).join(replacement);
+                    referenced.add(img.asset_pointer);
                 });
             }
 
@@ -1051,8 +1059,11 @@
                     mdLines.push(`<!-- 生成图片 (${leftover.length}) -->`);
                     leftover.forEach(img => {
                         const entry = imageFiles.get(img.asset_pointer);
-                        if (!entry) return;
-                        mdLines.push(`![${entry.dispositionLabel || 'image'}](images/${entry.filename})`);
+                        if (entry) {
+                            mdLines.push(`![${entry.dispositionLabel || 'image'}](images/${entry.filename})`);
+                        } else {
+                            mdLines.push(markdownExternalImageLink(img));
+                        }
                     });
                 }
             }

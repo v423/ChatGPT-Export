@@ -2604,7 +2604,7 @@
         }
 
         const leftoverImages = Array.isArray(message.images)
-          ? message.images.filter(image => image.localUrl && !referencedPointers.has(image.asset_pointer))
+          ? message.images.filter(image => (image.localUrl || image.url || image.download_url) && !referencedPointers.has(image.asset_pointer))
           : [];
 
         const imageGrid = leftoverImages.length
@@ -2695,7 +2695,7 @@
       }
 
       function renderImageFrame(image) {
-        const rawSrc = String(image.localUrl || image.url || "").trim();
+        const rawSrc = String(image.localUrl || image.url || image.download_url || "").trim();
         const src = safeImageUrl(rawSrc);
         const caption = image.dispositionLabel || image.filename || basename(image.localPath || "") || "image";
         if (!src) {
