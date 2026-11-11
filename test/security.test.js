@@ -8,6 +8,7 @@ const jszip = fs.readFileSync(path.join(__dirname, '..', 'reader/vendor/jszip.mi
 
 assert.doesNotMatch(tm, /^\s*\/\/\s*@require\s+https?:\/\//m, 'userscript must not load executable code from a remote CDN');
 assert.ok(tm.includes(jszip.trim()), 'userscript should embed the same vendored JSZip source used by the reader');
+assert.match(tm, /function installBundledJSZip\(\)/, 'bundled JSZip should be isolated from host-page module loaders');
 assert.doesNotMatch(tm, /XMLHttpRequest\.prototype\.open|this\.getRequestHeader/, 'broken XHR header interception must be removed');
 assert.doesNotMatch(tm, /function tryCaptureToken/, 'the fetch observer must not capture bearer tokens');
 assert.doesNotMatch(tm, /credentials\s*:\s*['"]include['"]/, 'asset requests must not send credentials to arbitrary origins');
