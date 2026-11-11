@@ -8,6 +8,10 @@
       const DB_NAME = "chatgpt-export-reader";
       const DB_VERSION = 1;
       const META_KEY = "library";
+      const MAX_IMPORT_ZIP_BYTES = 512 * 1024 * 1024;
+      const MAX_IMPORT_ENTRIES = 100000;
+      const MAX_IMPORT_ENTRY_UNCOMPRESSED_BYTES = 512 * 1024 * 1024;
+      const MAX_IMPORT_TOTAL_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024;
       const DEFAULT_SETTINGS = {
         language: "auto",
         theme: "system",
@@ -611,6 +615,13 @@
         return "";
       }
 
+      function safeImageUrl(url) {
+        const value = String(url || "").trim();
+        if (/^blob:/i.test(value)) return value;
+        if (/^data:image\/(?:png|jpe?g|gif|webp|avif|bmp);/i.test(value)) return value;
+        return "";
+      }
+
       function downloadBlob(blob, filename) {
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
@@ -1002,26 +1013,55 @@
       function nextFrame() {
         return new Promise(resolve => requestAnimationFrame(resolve));
       }
-      async function readZip(file) {
-        if (!window.JSZip) {
-          throw new Error(t("error.missingZipParser"));
+      function validateImportFileSize(file) {
+        const size = Number(file?.size);
+        if (!Number.isSafeInteger(size) || size < 0) throw new Error(t("error.zipMetadataInvalid"));
+        if (size > MAX_IMPORT_ZIP_BYTES) throw new Error(t("error.zipTooLarge", { max: formatBytes(MAX_IMPORT_ZIP_BYTES) }));
+      }
+
+      function validateZipEntryPath(name) {
+        const raw = String(name || "").replace(/\\/g, "/");
+        if (!raw || raw.includes("\0") || raw.startsWith("/") || /^[a-z]:/i.test(raw) || raw.split("/").includes("..")) {
+          throw new Error(t("error.zipUnsafePath"));
         }
+        const normalized = normalizeZipPath(raw);
+        if (!normalized) throw new Error(t("error.zipUnsafePath"));
+        return normalized;
+      }
+
+      function validateZipEntries(zipEntries) {
+        if (zipEntries.length > MAX_IMPORT_ENTRIES) throw new Error(t("error.zipTooManyEntries", { max: MAX_IMPORT_ENTRIES.toLocaleString() }));
+        let totalUncompressedSize = 0;
+        const seenPaths = new Set();
+        const validated = [];
+        for (const entry of zipEntries) {
+          const name = validateZipEntryPath(entry.name);
+          if (seenPaths.has(name)) throw new Error(t("error.zipDuplicatePath"));
+          seenPaths.add(name);
+          if (entry.dir) continue;
+          const size = Number(entry._data?.uncompressedSize);
+          if (!Number.isSafeInteger(size) || size < 0) throw new Error(t("error.zipMetadataInvalid"));
+          if (size > MAX_IMPORT_ENTRY_UNCOMPRESSED_BYTES) throw new Error(t("error.zipEntryTooLarge", { max: formatBytes(MAX_IMPORT_ENTRY_UNCOMPRESSED_BYTES) }));
+          totalUncompressedSize += size;
+          if (!Number.isSafeInteger(totalUncompressedSize) || totalUncompressedSize > MAX_IMPORT_TOTAL_UNCOMPRESSED_BYTES) {
+            throw new Error(t("error.zipExpandedTooLarge", { max: formatBytes(MAX_IMPORT_TOTAL_UNCOMPRESSED_BYTES) }));
+          }
+          validated.push({ entry, name });
+        }
+        return validated;
+      }
+
+      async function readZip(file) {
+        if (!window.JSZip) throw new Error(t("error.missingZipParser"));
+        validateImportFileSize(file);
         const zip = await window.JSZip.loadAsync(await file.arrayBuffer());
-        return Object.values(zip.files)
-          .filter(entry => !entry.dir)
-          .map(entry => ({
-            name: normalizeZipPath(entry.name),
-            async arrayBuffer() {
-              return await entry.async("arraybuffer");
-            },
-            async text() {
-              return await entry.async("string");
-            },
-            async blob(type) {
-              return new Blob([await entry.async("arraybuffer")], { type });
-            }
-          }))
-          .filter(entry => entry.name);
+        const validatedEntries = validateZipEntries(Object.values(zip.files));
+        return validatedEntries.map(({ entry, name }) => ({
+          name,
+          async arrayBuffer() { return await entry.async("arraybuffer"); },
+          async text() { return await entry.async("string"); },
+          async blob(type) { return new Blob([await entry.async("arraybuffer")], { type }); }
+        }));
       }
 
       function cleanMessageContent(text) {
@@ -1472,7 +1512,7 @@
 
       function resolveMarkdownImageUrl(src, baseDir) {
         const raw = String(src || "").trim().replace(/^<|>$/g, "");
-        const safe = safeUrl(raw);
+        const safe = safeImageUrl(raw);
         if (safe) return safe;
         const path = joinZipPath(baseDir || "", decodeURIComponentSafe(raw));
         const record = state.imageByFullPath.get(path);
@@ -2655,9 +2695,14 @@
       }
 
       function renderImageFrame(image) {
-        const src = safeUrl(image.localUrl || image.url || "");
-        if (!src) return "";
+        const rawSrc = String(image.localUrl || image.url || "").trim();
+        const src = safeImageUrl(rawSrc);
         const caption = image.dispositionLabel || image.filename || basename(image.localPath || "") || "image";
+        if (!src) {
+          const externalUrl = safeUrl(rawSrc);
+          if (!/^https?:\/\//i.test(externalUrl)) return "";
+          return `<div class="image-item"><a class="external-image-placeholder" href="${escapeHtml(externalUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(caption)}</a></div>`;
+        }
         const escapedSrc = escapeHtml(src);
         const escapedCaption = escapeHtml(caption);
         return `
@@ -2990,9 +3035,7 @@
           if (imageMatch) {
             flushAll();
             const src = resolveMarkdownImageUrl(imageMatch[2], baseDir);
-            if (src) {
-              html.push(renderImageFrame({ localUrl: src, dispositionLabel: imageMatch[1] || "image" }));
-            }
+            html.push(renderImageFrame({ localUrl: src, url: src ? "" : imageMatch[2], dispositionLabel: imageMatch[1] || "image" }));
             continue;
           }
 
@@ -3128,9 +3171,14 @@
         };
 
         output = output.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, src) => {
-          const url = resolveMarkdownImageUrl(src, baseDir);
-          if (!url) return "";
-          return renderImageFrame({ localUrl: url, dispositionLabel: alt || "image" });
+          const rawSrc = decodeHtmlEntities(src);
+          const url = resolveMarkdownImageUrl(rawSrc, baseDir);
+          if (url) return renderImageFrame({ localUrl: url, dispositionLabel: alt || "image" });
+          const externalUrl = safeUrl(rawSrc);
+          if (/^https?:\/\//i.test(externalUrl)) {
+            return `<a class="external-image-placeholder" href="${escapeHtml(externalUrl)}" target="_blank" rel="noopener noreferrer">${alt || "External image"}</a>`;
+          }
+          return alt || "";
         });
 
         output = output.replace(/\[([^\]]+)\]\(([^)\s]+)(?:\s+&quot;[^&]*&quot;)?\)/g, (_, label, url) => {
@@ -3319,21 +3367,19 @@
 
       async function importZipFile(file, { append = false } = {}) {
         if (!file) return;
+        try {
+          validateImportFileSize(file);
+        } catch (err) {
+          const message = err.message || t("error.importFailed");
+          setStatus(message);
+          showToast(message);
+          return;
+        }
         append = Boolean(append && state.conversations.length);
         const token = state.importToken + 1;
-        if (!append) {
-          resetImportedData({ cancelImport: false });
-        }
         state.importToken = token;
         const importedName = file.name || "export.zip";
-        if (!append) {
-          state.zipNames = [];
-          state.totalFiles = 0;
-        }
-        state.zipNames.push(importedName);
-        state.zipName = importedName;
         hideImportSummary();
-        dom.zipName.textContent = append ? `${state.zipName} (${t("settings.importAppend")})` : state.zipName;
         dom.zipStats.textContent = append ? t("status.readingIncremental") : t("status.reading");
         document.body.classList.add("busy");
 
@@ -3341,6 +3387,15 @@
           setStatus(t("status.parsingZip"));
           const entries = await readZip(file);
           if (token !== state.importToken) return;
+          if (!append) {
+            resetImportedData({ cancelImport: false });
+            state.zipNames = [];
+            state.totalFiles = 0;
+          }
+          state.zipNames.push(importedName);
+          state.zipName = importedName;
+          dom.zipName.textContent = append ? `${state.zipName} (${t("settings.importAppend")})` : state.zipName;
+          dom.zipStats.textContent = append ? t("status.readingIncremental") : t("status.reading");
           dom.zipStats.textContent = t("import.summaryStats", { conversations: 0, files: entries.length });
           const parsedConversations = await buildConversations(entries, token);
           if (token !== state.importToken) return;
