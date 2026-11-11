@@ -7,7 +7,11 @@ const reader = fs.readFileSync(path.join(__dirname, '..', 'reader/assets/reader.
 const jszip = fs.readFileSync(path.join(__dirname, '..', 'reader/vendor/jszip.min.js'), 'utf8');
 
 assert.doesNotMatch(tm, /^\s*\/\/\s*@require\s+https?:\/\//m, 'userscript must not load executable code from a remote CDN');
-assert.ok(tm.includes(jszip.trim()), 'userscript should embed the same vendored JSZip source used by the reader');
+const bundleStart = tm.indexOf('    /*!', tm.indexOf('function installBundledJSZip'));
+const bundleEnd = tm.indexOf('\\n})();', bundleStart);
+assert.ok(bundleStart >= 0 && bundleEnd > bundleStart, 'bundled JSZip source should be present');
+const bundledSource = tm.slice(bundleStart, bundleEnd).split('\\n').map(line => line.startsWith('    ') ? line.slice(4) : line).join('\\n');
+assert.equal(bundledSource.trim(), jszip.trim(), 'userscript should embed the exact vendored JSZip source used by the reader');
 assert.match(tm, /function markdownExternalImageLink\(image\)/, 'failed image downloads should keep a link to the original HTTPS asset');
 const markdownHelperStart = tm.indexOf('    function markdownLinkLabel(value) {');
 const markdownHelperEnd = tm.indexOf('    function markdownPath(path)', markdownHelperStart);
