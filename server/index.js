@@ -83,12 +83,14 @@ function replaceAssetMarkers(content, assets) {
 }
 
 function getConversationAssets(db, conversation) {
-  if (!conversation.import_id) return [];
   return db.prepare(
     'SELECT al.archive_path, al.base_dir, al.filename, al.kind, al.sha256, a.size, a.mime_type ' +
-    'FROM asset_locations al JOIN assets a ON a.sha256 = al.sha256 ' +
-    'WHERE al.import_id = ? AND al.base_dir = ? ORDER BY al.archive_path'
-  ).all(conversation.import_id, conversation.project_path || '');
+    'FROM import_conversations ic ' +
+    'JOIN asset_locations al ON al.import_id = ic.import_id ' +
+    'JOIN assets a ON a.sha256 = al.sha256 ' +
+    'WHERE ic.conversation_id = ? AND al.base_dir = ? ' +
+    'ORDER BY (SELECT created_at FROM import_jobs WHERE id = al.import_id) DESC, al.archive_path'
+  ).all(conversation.id, conversation.project_path || '');
 }
 
 function renderMessageRow(message, assets) {
