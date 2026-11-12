@@ -35,13 +35,35 @@ assert.match(html, /turn846082search1/);
 assert.match(html, /https:\/\/f-droid\.org/);
 assert.doesNotMatch(html, /<img[^>]+src="https?:/i);
 
+const rawRemoteImage = renderRichContent('<img src="https://tracker.example/pixel.png" alt="tracking"/>');
+assert.doesNotMatch(rawRemoteImage, /tracker\\.example/);
+assert.match(rawRemoteImage, /alt="tracking"/);
+const localImage = renderRichContent('<img src="/api/assets/' + 'a'.repeat(64) + '" alt="local"/>');
+assert.match(localImage, /src="\\/api\\/assets\\//);
+
+const video = renderRichContent('<AsyncVideo query="demo video"/>');
+assert.match(video, /视频引用/);
+const appBlock = renderRichContent('<AppBlock title="unsafe"><script>run()</script></AppBlock>');
+assert.match(appBlock, /不执行/);
+assert.doesNotMatch(appBlock, /<script/i);
+
 const table = renderRichContent('| Name | Value |\n| --- | ---: |\n| Chats | 120 |');
 assert.match(table, /<table>/);
 assert.match(table, /Chats/);
+const structuredTable = renderRichContent('<table><table-row><table-cell header={true} rowSpan={2} align="center">A</table-cell><table-cell colSpan={2}>B</table-cell></table-row></table>');
+assert.match(structuredTable, /rowspan="2"/);
+assert.match(structuredTable, /colspan="2"/);
+assert.match(structuredTable, /text-align:center/);
 
 const chart = renderRichContent('<Chart content={{"chartType":"bar","xKey":"day","series":[{"dataKey":"count"}],"data":[{"day":"Mon","count":2}]}}/>');
 assert.match(chart, /dil-chart/);
 assert.match(chart, /<svg/);
+const pie = renderRichContent('<Chart content={{"chartType":"pie","nameKey":"name","valueKey":"value","series":[{"dataKey":"value"}],"data":[{"name":"A","value":3},{"name":"B","value":2}]}}/>');
+assert.match(pie, /dil-chart-pie/);
+assert.match(pie, /A/);
+const scatter = renderRichContent('<Chart content={{"chartType":"scatter","xKey":"x","series":[{"dataKey":"y"}],"data":[{"x":1,"y":2},{"x":3,"y":4}]}}/>');
+assert.match(scatter, /<circle/);
+assert.doesNotMatch(scatter, /<polyline/);
 
 const fence = String.fromCharCode(96).repeat(3);
 const mermaid = renderRichContent(fence + 'mermaid\nflowchart TD\nA[Start] --> B{Ready?}\nB --> C[Yes]\nB --> D[No]\n' + fence);

@@ -116,11 +116,11 @@ function getMessagePage(db, conversation, params) {
   let rows;
   if (Number.isFinite(before)) {
     rows = db.prepare(
-      'SELECT * FROM messages WHERE conversation_id = ? AND sequence < ? ORDER BY sequence DESC LIMIT ?'
+      'SELECT message_id, sequence, role, author_name, channel, created_at, content_text, metadata_json FROM messages WHERE conversation_id = ? AND sequence < ? ORDER BY sequence DESC LIMIT ?'
     ).all(conversation.id, before, limit);
   } else {
     rows = db.prepare(
-      'SELECT * FROM messages WHERE conversation_id = ? ORDER BY sequence DESC LIMIT ?'
+      'SELECT message_id, sequence, role, author_name, channel, created_at, content_text, metadata_json FROM messages WHERE conversation_id = ? ORDER BY sequence DESC LIMIT ?'
     ).all(conversation.id, limit);
   }
   rows.reverse();
@@ -137,40 +137,48 @@ function getMessagePage(db, conversation, params) {
   };
 }
 
-function searchConversations(db, query, limit, offset) {
-  const match = makeFtsQuery(query);
-  if (match && db.ftsEnabled) {
+function searchConversations(db, query, limit, offset, project = '') {
+  const normalized = String(query || '').trim().slice(0, 256);
+  const match = makeFtsQuery(normalized);
+  const projectClause = project ? ' AND c.project_title = ?' : '';
+  const projectArgs = project ? [project] : [];
+
+  // unicode61 is not a substring tokenizer for CJK text; use LIKE for reliable Chinese/Japanese/Korean search.
+  if (match && db.ftsEnabled && !/[\u3400-\u9fff]/.test(normalized)) {
     try {
-      const total = db.prepare(
-        'SELECT COUNT(DISTINCT conversation_id) AS count FROM messages_fts WHERE messages_fts MATCH ?'
-      ).get(match).count;
+      const where = '(c.id IN (' +
+        'SELECT DISTINCT conversation_id FROM messages_fts WHERE messages_fts MATCH ?' +
+        ') OR c.id IN (' +
+        'SELECT conversation_id FROM conversations_fts WHERE conversations_fts MATCH ?' +
+        '))' + projectClause;
+      const total = db.prepare('SELECT COUNT(*) AS count FROM conversations c WHERE ' + where)
+        .get(match, match, ...projectArgs).count;
       const items = db.prepare(
         'SELECT c.id, c.title, c.project_title, c.updated_at, c.message_count ' +
-        'FROM conversations c WHERE c.id IN (' +
-        'SELECT DISTINCT conversation_id FROM messages_fts WHERE messages_fts MATCH ?' +
-        ') ORDER BY c.updated_at DESC LIMIT ? OFFSET ?'
-      ).all(match, limit, offset);
+        'FROM conversations c WHERE ' + where +
+        ' ORDER BY c.updated_at DESC LIMIT ? OFFSET ?'
+      ).all(match, match, ...projectArgs, limit, offset);
       return { items, total };
     } catch (_) {
-      // Fall through to LIKE search for unsupported FTS query syntax.
+      // Fall through to substring search for unsupported FTS syntax.
     }
   }
 
-  const like = '%' + String(query || '').toLowerCase().replace(/[%_]/g, '') + '%';
-  const total = db.prepare(
-    'SELECT COUNT(DISTINCT c.id) AS count FROM conversations c ' +
-    'LEFT JOIN messages m ON m.conversation_id = c.id ' +
-    'WHERE lower(c.title) LIKE ? OR lower(COALESCE(m.content_text, \'\')) LIKE ?'
-  ).get(like, like).count;
+  const like = '%' + normalized.toLowerCase().replace(/[%_]/g, '') + '%';
+  const where = '(' +
+    'lower(c.title) LIKE ? OR lower(COALESCE(c.project_title, \'\')) LIKE ? OR ' +
+    'EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND lower(m.content_text) LIKE ?)' +
+    ')' + projectClause;
+  const values = [like, like, like, ...projectArgs];
+  const total = db.prepare('SELECT COUNT(*) AS count FROM conversations c WHERE ' + where)
+    .get(...values).count;
   const items = db.prepare(
-    'SELECT DISTINCT c.id, c.title, c.project_title, c.updated_at, c.message_count ' +
-    'FROM conversations c LEFT JOIN messages m ON m.conversation_id = c.id ' +
-    'WHERE lower(c.title) LIKE ? OR lower(COALESCE(m.content_text, \'\')) LIKE ? ' +
-    'ORDER BY c.updated_at DESC LIMIT ? OFFSET ?'
-  ).all(like, like, limit, offset);
+    'SELECT c.id, c.title, c.project_title, c.updated_at, c.message_count ' +
+    'FROM conversations c WHERE ' + where +
+    ' ORDER BY c.updated_at DESC LIMIT ? OFFSET ?'
+  ).all(...values, limit, offset);
   return { items, total };
 }
-
 function createSizeGuard(maxBytes) {
   let received = 0;
   return new Transform({
@@ -232,10 +240,7 @@ function createServer(options = {}) {
         const project = String(url.searchParams.get('project') || '').trim();
         let result;
         if (query) {
-          result = searchConversations(db, query, limit, offset);
-          if (project) {
-            result.items = result.items.filter(item => item.project_title === project);
-          }
+          result = searchConversations(db, query, limit, offset, project);
         } else {
           const where = project ? 'WHERE project_title = ?' : '';
           const values = project ? [project] : [];
@@ -258,7 +263,7 @@ function createServer(options = {}) {
 
       const messagesMatch = pathname.match(/^\/api\/conversations\/([^/]+)\/messages$/);
       if (request.method === 'GET' && messagesMatch) {
-        const conversation = db.prepare('SELECT * FROM conversations WHERE id = ?').get(messagesMatch[1]);
+        const conversation = db.prepare('SELECT id, title, project_title, project_path, created_at, updated_at, message_count FROM conversations WHERE id = ?').get(messagesMatch[1]);
         if (!conversation) {
           sendJson(response, 404, { error: 'Conversation not found' });
           return;
@@ -269,7 +274,7 @@ function createServer(options = {}) {
 
       const conversationMatch = pathname.match(/^\/api\/conversations\/([^/]+)$/);
       if (request.method === 'GET' && conversationMatch) {
-        const conversation = db.prepare('SELECT * FROM conversations WHERE id = ?').get(conversationMatch[1]);
+        const conversation = db.prepare('SELECT id, title, project_title, project_path, created_at, updated_at, message_count FROM conversations WHERE id = ?').get(conversationMatch[1]);
         if (!conversation) {
           sendJson(response, 404, { error: 'Conversation not found' });
           return;
@@ -394,12 +399,19 @@ function createServer(options = {}) {
           sendJson(response, 404, { error: 'Asset file is missing' });
           return;
         }
+        const mimeType = String(asset.mime_type || 'application/octet-stream').toLowerCase();
+        const safeInline = /^image\/(?:png|jpeg|gif|webp|avif|bmp)$/.test(mimeType) ||
+          mimeType.startsWith('audio/') || mimeType.startsWith('video/');
         response.writeHead(200, {
-          'Content-Type': asset.mime_type || 'application/octet-stream',
+          'Content-Type': mimeType,
           'Content-Length': stat.size,
-          'Content-Disposition': 'inline',
-          'Cache-Control': 'public, max-age=31536000, immutable',
-          'X-Content-Type-Options': 'nosniff'
+          'Content-Disposition': safeInline ? 'inline' : 'attachment',
+          'Cache-Control': 'private, max-age=31536000, immutable',
+          'X-Content-Type-Options': 'nosniff',
+          'X-Content-Security-Policy': "default-src 'none'; sandbox; base-uri 'none'",
+          'Content-Security-Policy': "default-src 'none'; sandbox; base-uri 'none'",
+          'Referrer-Policy': 'no-referrer',
+          'Cross-Origin-Resource-Policy': 'same-origin'
         });
         fs.createReadStream(asset.storage_path).pipe(response);
         return;
