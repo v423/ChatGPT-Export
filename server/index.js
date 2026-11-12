@@ -200,7 +200,7 @@ function createServer(options = {}) {
   const dbPath = options.dbPath || path.join(dataDir, 'chatgpt.sqlite');
   const publicDir = path.resolve(options.publicDir || path.join(__dirname, '..', 'app', 'public'));
   const host = options.host || process.env.HOST || '127.0.0.1';
-  const port = Number(options.port || process.env.PORT || 4317);
+  const port = Number(options.port ?? process.env.PORT ?? 4317);
   const db = options.db || openDatabase(dbPath);
 
   const server = http.createServer(async (request, response) => {
