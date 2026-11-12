@@ -86,6 +86,7 @@ The `test/` directory contains a set of Node-based static checks covering the us
 - The userscript takes effect only on the ChatGPT domains declared in its metadata and accesses conversation data through the current logged-in session.
 - The exporter does not send conversation content, access tokens, or attachments to unrelated third-party services. Cross-origin asset downloads are limited to OpenAI-owned hosts and omit cookies, authorization headers, and referrers.
 - The offline reader does not automatically load remote images; external image references remain available as user-clickable links.
+- The conversation picker keeps only list metadata (IDs, titles, timestamps, archive state, and project labels) in the current tab's `sessionStorage` for up to 7 days. Complete lists are reused immediately and refreshed incrementally; message bodies and access tokens are never stored in this cache.
 - Imported content is stored only in the current browser's IndexedDB and is never uploaded to a server.
 
 ## Dependency Integrity

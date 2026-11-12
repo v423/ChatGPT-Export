@@ -3,7 +3,7 @@
 // @name:zh-CN   ChatGPT 通用导出器（Markdown 支持）
 // @name:zh-TW   ChatGPT 通用匯出器（Markdown 支援）
 // @namespace    https://greasyfork.org/users/1616937-owlct
-// @version      1.3.7
+// @version      1.3.8
 // @description  Export ChatGPT conversations from personal, project, and team workspaces to local ZIP archives with JSON, Markdown, assets, and an offline reader.
 // @description:zh-CN  将 ChatGPT 个人、项目和团队空间对话导出为本地 ZIP，包含 JSON、Markdown、资源文件和离线阅读器。
 // @description:zh-TW  將 ChatGPT 個人、專案和團隊工作區對話匯出為本機 ZIP，包含 JSON、Markdown、資源檔案和離線閱讀器。
@@ -56,8 +56,14 @@
     const PAGE_LIMIT = 100;
     const PROJECT_SIDEBAR_PREVIEW = 5;
     const PROJECT_SIDEBAR_LIMIT = 50;
+    const LIST_CACHE_VERSION = 1;
+    const LIST_CACHE_FRESH_MS = 2 * 60 * 1000;
+    const LIST_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+    const LIST_CACHE_MAX_ENTRIES = 12000;
+    const PROJECT_LIST_CONCURRENCY = 4;
     let accessToken = null;
     let capturedWorkspaceIds = new Set(); // 仅缓存 Workspace ID，不保存 Authorization Token
+    const conversationListCaches = new Map();
 
     const SCRIPT_FALLBACK_LOCALE = 'en-US';
     const SCRIPT_LOCALES = {
@@ -111,6 +117,9 @@
             'filter.timeCreate': 'By created time',
             'filter.dateTo': 'to',
             'status.loadingList': 'Loading list...',
+            'status.localSyncing': 'Showing {count} local entries; refreshing the list in the background...',
+            'status.localFallback': 'Showing {count} local entries. Online refresh failed: {message}',
+            'status.projectPartial': 'Some project lists could not be refreshed; sidebar previews are shown.',
             'status.listSummary': '{total} total, {filtered} filtered, showing {visible}, selected {selected}',
             'status.noMatches': 'No matching conversations.',
             'status.loadFailed': 'Load failed: {message}',
@@ -198,6 +207,9 @@
             'filter.timeCreate': '按创建时间',
             'filter.dateTo': '至',
             'status.loadingList': '正在加载列表...',
+            'status.localSyncing': '已显示本地缓存的 {count} 条记录，正在后台补充最新数据...',
+            'status.localFallback': '当前显示本地缓存的 {count} 条记录，在线更新失败：{message}',
+            'status.projectPartial': '部分项目列表更新失败，当前显示侧边栏中的预览记录。',
             'status.listSummary': '共 {total} 条，当前筛选 {filtered} 条，显示 {visible} 条，已选 {selected} 条',
             'status.noMatches': '没有匹配的对话。',
             'status.loadFailed': '加载失败: {message}',
@@ -312,31 +324,48 @@
 
     const t = getScriptTranslation;
 
-    // --- 仅观察同源 ChatGPT API 请求中的 Workspace ID ---
-    // 不读取或缓存 Authorization；访问令牌仅通过下面的同源 session API 获取。
-    (function captureWorkspaceIdsOnly() {
+    // --- 观察同源列表请求：只缓存会话列表元数据，不读取 Authorization ---
+    (function captureWorkspaceIdsAndLocalLists() {
         const rawFetch = window.fetch;
         window.fetch = function (resource, options) {
+            let url;
+            let workspaceId = null;
             try {
-                const requestUrl = typeof Request !== 'undefined' && resource instanceof Request ? resource.url : String(resource);
-                const url = new URL(requestUrl, location.href);
-                if (url.origin === location.origin && url.pathname.startsWith('/backend-api/')) {
-                    const headerSource = options?.headers ?? (
-                        typeof Request !== 'undefined' && resource instanceof Request ? resource.headers : null
-                    );
-                    let id = null;
-                    if (headerSource instanceof Headers) {
-                        id = headerSource.get('ChatGPT-Account-Id');
-                    } else if (Array.isArray(headerSource)) {
-                        const pair = headerSource.find(([name]) => String(name).toLowerCase() === 'chatgpt-account-id');
-                        id = pair?.[1] || null;
-                    } else if (headerSource && typeof headerSource === 'object') {
-                        id = headerSource['ChatGPT-Account-Id'] || headerSource['chatgpt-account-id'] || null;
-                    }
-                    if (id) capturedWorkspaceIds.add(id);
+                const requestUrl = typeof Request !== 'undefined' && resource instanceof Request
+                    ? resource.url
+                    : String(resource);
+                url = new URL(requestUrl, location.href);
+                if (url.origin !== location.origin || !url.pathname.startsWith('/backend-api/')) {
+                    return rawFetch.apply(this, arguments);
                 }
-            } catch (_) {}
-            return rawFetch.apply(this, arguments);
+                const headers = new Headers(
+                    typeof Request !== 'undefined' && resource instanceof Request ? resource.headers : undefined
+                );
+                if (options?.headers) {
+                    new Headers(options.headers).forEach((value, name) => headers.set(name, value));
+                }
+                workspaceId = headers.get('ChatGPT-Account-Id');
+                if (workspaceId) capturedWorkspaceIds.add(workspaceId);
+            } catch (_) {
+                return rawFetch.apply(this, arguments);
+            }
+
+            const isListEndpoint = url.pathname === '/backend-api/conversations'
+                || url.pathname === '/backend-api/gizmos/snorlax/sidebar'
+                || /^\/backend-api\/gizmos\/[^/]+\/conversations$/.test(url.pathname);
+            const responsePromise = rawFetch.apply(this, arguments);
+            if (!isListEndpoint) return responsePromise;
+
+            return responsePromise.then(response => {
+                if (response?.ok) {
+                    try {
+                        response.clone().json()
+                            .then(payload => captureConversationListResponse(url, workspaceId, payload))
+                            .catch(() => {});
+                    } catch (_) {}
+                }
+                return response;
+            });
         };
     })();
     async function ensureAccessToken() {
@@ -1166,40 +1195,29 @@
                     await sleep(jitter());
                 }
             } else {
-                btn.textContent = `📂 ${t('status.fetchingOrphanConversations')}`;
-                const orphanIds = await collectIds(btn, workspaceId, null);
-                for (let i = 0; i < orphanIds.length; i++) {
-                    btn.textContent = `📥 ${t('status.rootProgress', { current: i + 1, total: orphanIds.length })}`;
+                btn.textContent = '📂 ' + t('status.fetchingOrphanConversations');
+                const entries = await listConversations(workspaceId);
+                for (let i = 0; i < entries.length; i++) {
+                    const entry = entries[i];
+                    const label = entry.title ? entry.title.slice(0, 12) : t('fallback.conversation');
+                    btn.textContent = '📥 ' + label + ' (' + (i + 1) + '/' + entries.length + ')';
                     try {
-                        const convData = await getConversation(orphanIds[i], workspaceId);
-                        await exportConversationIntoZip(convData, zip, accessToken, zipFilenameRegistry);
+                        const convData = await getConversation(entry.id, workspaceId);
+                        const target = entry.projectTitle
+                            ? zip.folder(sanitizeFilename(entry.projectTitle))
+                            : zip;
+                        await exportConversationIntoZip(convData, target, accessToken, zipFilenameRegistry);
                     } catch (convErr) {
-                        console.error(`⚠️ 跳过对话 [${orphanIds[i]}]: ${convErr.message}`);
-                        failedConversations.push({ id: orphanIds[i], title: orphanIds[i], error: convErr.message });
+                        console.error('⚠️ 跳过对话 [' + (entry.title || entry.id) + ']: ' + convErr.message);
+                        failedConversations.push({
+                            id: entry.id,
+                            title: entry.title || t('fallback.unknown'),
+                            error: convErr.message
+                        });
                     }
                     await sleep(jitter());
                 }
 
-                btn.textContent = `🔍 ${t('status.fetchingProjectList')}`;
-                const projects = await getProjects(workspaceId);
-                for (const project of projects) {
-                    const projectFolder = zip.folder(sanitizeFilename(project.title));
-                    btn.textContent = `📂 ${t('status.project', { title: project.title })}`;
-                    const projectConvIds = await collectIds(btn, workspaceId, project.id);
-                    if (projectConvIds.length === 0) continue;
-
-                    for (let i = 0; i < projectConvIds.length; i++) {
-                        btn.textContent = `📥 ${t('status.projectProgress', { title: project.title.substring(0, 10), current: i + 1, total: projectConvIds.length })}`;
-                        try {
-                            const convData = await getConversation(projectConvIds[i], workspaceId);
-                            await exportConversationIntoZip(convData, projectFolder, accessToken, zipFilenameRegistry);
-                        } catch (convErr) {
-                            console.error(`⚠️ 跳过对话 [${projectConvIds[i]}]: ${convErr.message}`);
-                            failedConversations.push({ id: projectConvIds[i], title: projectConvIds[i], error: convErr.message });
-                        }
-                        await sleep(jitter());
-                    }
-                }
             }
 
             btn.textContent = `📦 ${t('status.generatingZip')}`;
@@ -1352,7 +1370,6 @@
             });
             cursor = data.cursor || null;
             if (cursor) {
-                await sleep(jitter());
             }
         } while (cursor);
 
@@ -1418,145 +1435,485 @@
     }
 
     function upsertConversationEntry(map, item, extra = {}) {
-        if (!item?.id) return;
+        if (!item?.id) return null;
+        const hasArchiveState = extra.is_archived !== undefined || item.is_archived !== undefined;
         const create_time = normalizeEpochSeconds(item.create_time || 0);
         const update_time = normalizeEpochSeconds(item.update_time || item.create_time || 0);
         const entry = {
-            id: item.id,
+            id: String(item.id),
             title: item.title || t('fallback.untitledConversation'),
             create_time,
             update_time,
-            is_archived: item.is_archived ?? extra.is_archived ?? false,
-            projectId: extra.projectId || null,
-            projectTitle: extra.projectTitle || null
+            is_archived: extra.is_archived ?? item.is_archived ?? false,
+            projectId: extra.projectId || item.projectId || null,
+            projectTitle: extra.projectTitle || item.projectTitle || null
         };
         const existing = map.get(entry.id);
         if (!existing) {
             map.set(entry.id, entry);
-            return;
+            return entry;
         }
-        if (!existing.projectTitle && entry.projectTitle) {
+        if (entry.projectTitle) {
             existing.projectTitle = entry.projectTitle;
             existing.projectId = entry.projectId;
         }
-        if (!existing.create_time && entry.create_time) {
-            existing.create_time = entry.create_time;
+        if (!existing.create_time && entry.create_time) existing.create_time = entry.create_time;
+        if (hasArchiveState) existing.is_archived = entry.is_archived;
+        if (entry.update_time > (existing.update_time || 0)) existing.update_time = entry.update_time;
+        if (item.title) existing.title = item.title;
+        return existing;
+    }
+
+    function getConversationCacheKey(workspaceId) {
+        const scope = workspaceId ? String(workspaceId) : 'personal';
+        return 'chatgpt-exporter:conversation-list:v' + LIST_CACHE_VERSION + ':' + encodeURIComponent(scope);
+    }
+
+    function createEmptyConversationListCache() {
+        return {
+            entries: new Map(),
+            projects: new Map(),
+            rootComplete: false,
+            projectComplete: false,
+            rootUpdatedAt: 0,
+            projectUpdatedAt: 0,
+            updatedAt: 0
+        };
+    }
+
+    function loadConversationListCache(workspaceId) {
+        const key = getConversationCacheKey(workspaceId);
+        let cache = conversationListCaches.get(key);
+        if (cache) {
+            const latest = Math.max(cache.rootUpdatedAt || 0, cache.projectUpdatedAt || 0, cache.updatedAt || 0);
+            if (latest && Date.now() - latest > LIST_CACHE_MAX_AGE_MS) {
+                conversationListCaches.delete(key);
+                try { sessionStorage.removeItem(key); } catch (_) {}
+                cache = null;
+            }
         }
-        existing.is_archived = existing.is_archived || entry.is_archived;
-        if ((entry.update_time || 0) > (existing.update_time || 0)) {
-            existing.update_time = entry.update_time;
-        }
-        if (existing.title === t('fallback.untitledConversation') && entry.title) {
-            existing.title = entry.title;
+        if (cache) return cache;
+
+        cache = createEmptyConversationListCache();
+        try {
+            const raw = sessionStorage.getItem(key);
+            if (raw) {
+                const saved = JSON.parse(raw);
+                const latest = Math.max(saved.rootUpdatedAt || 0, saved.projectUpdatedAt || 0, saved.updatedAt || 0);
+                if (saved.version === LIST_CACHE_VERSION && Array.isArray(saved.entries)
+                    && (!latest || Date.now() - latest <= LIST_CACHE_MAX_AGE_MS)) {
+                    saved.entries.forEach(item => upsertConversationEntry(cache.entries, item));
+                    (Array.isArray(saved.projects) ? saved.projects : []).forEach(project => {
+                        if (project?.id) cache.projects.set(String(project.id), String(project.title || ''));
+                    });
+                    cache.rootComplete = Boolean(saved.rootComplete);
+                    cache.projectComplete = Boolean(saved.projectComplete);
+                    cache.rootUpdatedAt = Number(saved.rootUpdatedAt) || 0;
+                    cache.projectUpdatedAt = Number(saved.projectUpdatedAt) || 0;
+                    cache.updatedAt = Number(saved.updatedAt) || latest || 0;
+                } else {
+                    sessionStorage.removeItem(key);
+                }
+            }
+        } catch (_) {}
+        conversationListCaches.set(key, cache);
+        return cache;
+    }
+
+    function persistConversationListCache(workspaceId, cache) {
+        const key = getConversationCacheKey(workspaceId);
+        cache.updatedAt = Date.now();
+        conversationListCaches.set(key, cache);
+        const sorted = Array.from(cache.entries.values())
+            .sort((a, b) => (b.update_time || 0) - (a.update_time || 0));
+        const truncated = sorted.length > LIST_CACHE_MAX_ENTRIES;
+        const payload = {
+            version: LIST_CACHE_VERSION,
+            updatedAt: cache.updatedAt,
+            rootUpdatedAt: cache.rootUpdatedAt,
+            projectUpdatedAt: cache.projectUpdatedAt,
+            rootComplete: cache.rootComplete && !truncated,
+            projectComplete: cache.projectComplete && !truncated,
+            projects: Array.from(cache.projects.entries()).map(([id, title]) => ({ id, title })),
+            entries: sorted.slice(0, LIST_CACHE_MAX_ENTRIES)
+        };
+        try {
+            sessionStorage.setItem(key, JSON.stringify(payload));
+        } catch (_) {
+            // sessionStorage may be unavailable or full; the in-memory cache remains usable.
         }
     }
 
-    async function listConversations(workspaceId) {
-        if (!await ensureAccessToken()) {
-            throw new Error(t('alert.accessTokenUnavailable'));
+    function clearConversationListCacheMemory() {
+        conversationListCaches.clear();
+    }
+
+    function isConversationListCacheComplete(cache, workspaceId, projectOnly = false) {
+        if (projectOnly) return Boolean(cache.projectComplete);
+        return Boolean(cache.rootComplete && (!workspaceId || cache.projectComplete));
+    }
+
+    function isConversationListCacheFresh(cache, workspaceId, projectOnly = false) {
+        const now = Date.now();
+        if (projectOnly) {
+            return Boolean(cache.projectComplete && cache.projectUpdatedAt
+                && now - cache.projectUpdatedAt <= LIST_CACHE_FRESH_MS);
         }
+        const rootFresh = Boolean(cache.rootComplete && cache.rootUpdatedAt
+            && now - cache.rootUpdatedAt <= LIST_CACHE_FRESH_MS);
+        const projectsFresh = !workspaceId || Boolean(cache.projectComplete && cache.projectUpdatedAt
+            && now - cache.projectUpdatedAt <= LIST_CACHE_FRESH_MS);
+        return rootFresh && projectsFresh;
+    }
 
-        const deviceId = getOaiDeviceId();
-        if (!deviceId) {
-            throw new Error(t('error.deviceIdUnavailable'));
-        }
+    function cloneConversationEntryMap(source, predicate = null) {
+        const result = new Map();
+        source.forEach((entry, id) => {
+            if (!predicate || predicate(entry)) result.set(id, { ...entry });
+        });
+        return result;
+    }
 
-        const headers = {
-            'Authorization': `Bearer ${accessToken}`,
-            'oai-device-id': deviceId
-        };
-        if (workspaceId) { headers['ChatGPT-Account-Id'] = workspaceId; }
-
-        const map = new Map();
-        const addEntry = (item, extra = {}) => upsertConversationEntry(map, item, extra);
-
-        for (const is_archived of [false, true]) {
-            let offset = 0;
-            let has_more = true;
-            do {
-                const r = await fetch(`/backend-api/conversations?offset=${offset}&limit=${PAGE_LIMIT}&order=updated${is_archived ? '&is_archived=true' : ''}`, { headers });
-                if (!r.ok) throw new Error(t('error.conversationListFailed', { status: r.status }));
-                const j = await r.json();
-                if (j.items && j.items.length > 0) {
-                    j.items.forEach(it => addEntry(it, { is_archived }));
-                    has_more = j.items.length === PAGE_LIMIT;
-                    offset += j.items.length;
-                } else {
-                    has_more = false;
-                }
-                await sleep(jitter());
-            } while (has_more);
-        }
-
-        if (workspaceId) {
-            const projects = await getProjects(workspaceId);
-            for (const project of projects) {
-                let cursor = '0';
-                do {
-                    const r = await fetch(`/backend-api/gizmos/${project.id}/conversations?cursor=${cursor}`, { headers });
-                    if (!r.ok) throw new Error(t('error.projectConversationListFailed', { status: r.status }));
-                    const j = await r.json();
-                    j.items?.forEach(it => addEntry(it, { projectId: project.id, projectTitle: project.title }));
-                    cursor = j.cursor;
-                    await sleep(jitter());
-                } while (cursor);
-            }
-        }
-
+    function sortedConversationEntries(map, projectOnly = false) {
         return Array.from(map.values())
+            .filter(entry => !projectOnly || Boolean(entry.projectId))
             .sort((a, b) => (b.update_time || 0) - (a.update_time || 0));
     }
 
-    async function listProjectSpaceConversations(workspaceId) {
-        if (!await ensureAccessToken()) {
-            throw new Error(t('alert.accessTokenUnavailable'));
-        }
+    function emitConversationListUpdate(onUpdate, list, meta = {}) {
+        if (typeof onUpdate !== 'function') return;
+        try { onUpdate(list, meta); }
+        catch (err) { console.warn('[ChatGPT Exporter] 列表界面更新失败:', err); }
+    }
 
-        const deviceId = getOaiDeviceId();
-        if (!deviceId) {
-            throw new Error(t('error.deviceIdUnavailable'));
-        }
+    function captureConversationListResponse(url, workspaceId, payload) {
+        if (!url || !payload || typeof payload !== 'object') return;
+        const path = url.pathname;
+        const isRootList = path === '/backend-api/conversations';
+        const isProjectSidebar = path === '/backend-api/gizmos/snorlax/sidebar';
+        const projectMatch = path.match(/^\/backend-api\/gizmos\/([^/]+)\/conversations$/);
+        if (!isRootList && !isProjectSidebar && !projectMatch) return;
 
-        const headers = {
-            'Authorization': `Bearer ${accessToken}`,
-            'oai-device-id': deviceId
-        };
-        const resolvedWorkspaceId = resolveWorkspaceId(workspaceId);
-        if (resolvedWorkspaceId) { headers['ChatGPT-Account-Id'] = resolvedWorkspaceId; }
+        const resolvedWorkspaceId = workspaceId || (projectMatch || isProjectSidebar ? resolveWorkspaceId(null) : null);
+        const cache = loadConversationListCache(resolvedWorkspaceId);
+        const items = Array.isArray(payload.items) ? payload.items : [];
 
-        const map = new Map();
-        const projects = await getProjectSpaces(resolvedWorkspaceId, { conversationsPerGizmo: PROJECT_SIDEBAR_PREVIEW, ownedOnly: true });
-
-        for (const project of projects) {
-            let cursor = '0';
-            let fetched = false;
-            do {
-                const r = await fetch(`/backend-api/gizmos/${project.id}/conversations?cursor=${cursor}`, { headers });
-                if (!r.ok) {
-                    if (!fetched && Array.isArray(project.conversations) && project.conversations.length > 0) {
-                        console.warn(`项目空间对话列表请求失败 (${r.status})，使用侧边栏返回的预览对话。`);
-                        project.conversations.forEach(item => upsertConversationEntry(map, item, {
-                            projectId: project.id,
-                            projectTitle: project.title
-                        }));
-                        cursor = null;
-                        break;
-                    }
-                    throw new Error(t('error.projectSpaceConversationListFailed', { status: r.status }));
-                }
-                const j = await r.json();
-                j.items?.forEach(item => upsertConversationEntry(map, item, {
+        if (isRootList) {
+            const archived = url.searchParams.get('is_archived') === 'true';
+            items.forEach(item => upsertConversationEntry(cache.entries, item, { is_archived: archived }));
+            cache.rootUpdatedAt = Date.now();
+        } else if (isProjectSidebar) {
+            items.forEach(rawProject => {
+                const project = normalizeProjectSpaceItem(rawProject);
+                if (!project) return;
+                cache.projects.set(String(project.id), project.title);
+                project.conversations.forEach(item => upsertConversationEntry(cache.entries, item, {
                     projectId: project.id,
                     projectTitle: project.title
                 }));
-                cursor = j.cursor;
-                fetched = true;
-                await sleep(jitter());
-            } while (cursor);
+            });
+            cache.projectUpdatedAt = Date.now();
+        } else if (projectMatch) {
+            let projectId = projectMatch[1];
+            try { projectId = decodeURIComponent(projectId); } catch (_) {}
+            const projectTitle = cache.projects.get(String(projectId)) || null;
+            items.forEach(item => upsertConversationEntry(cache.entries, item, {
+                projectId,
+                projectTitle
+            }));
+            cache.projectUpdatedAt = Date.now();
+        }
+        persistConversationListCache(resolvedWorkspaceId, cache);
+    }
+
+    async function mapWithConcurrency(items, concurrency, worker) {
+        let nextIndex = 0;
+        const errors = [];
+        const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+            while (nextIndex < items.length) {
+                const index = nextIndex++;
+                try { await worker(items[index], index); }
+                catch (err) { errors.push(err); }
+            }
+        });
+        await Promise.all(workers);
+        if (errors.length) throw errors[0];
+    }
+
+    async function getConversationListHeaders(workspaceId) {
+        if (!await ensureAccessToken()) throw new Error(t('alert.accessTokenUnavailable'));
+        const deviceId = getOaiDeviceId();
+        if (!deviceId) throw new Error(t('error.deviceIdUnavailable'));
+        const headers = {
+            'Authorization': 'Bearer ' + accessToken,
+            'oai-device-id': deviceId
+        };
+        if (workspaceId) headers['ChatGPT-Account-Id'] = workspaceId;
+        return headers;
+    }
+
+    async function fetchRootConversationPages(map, headers, firstPageOnly = false) {
+        for (const isArchived of [false, true]) {
+            let offset = 0;
+            while (true) {
+                const url = '/backend-api/conversations?offset=' + offset + '&limit=' + PAGE_LIMIT
+                    + '&order=updated' + (isArchived ? '&is_archived=true' : '');
+                const response = await fetch(url, { headers });
+                if (!response.ok) throw new Error(t('error.conversationListFailed', { status: response.status }));
+                const data = await response.json();
+                const items = Array.isArray(data.items) ? data.items : [];
+                items.forEach(item => upsertConversationEntry(map, item, { is_archived: isArchived }));
+                if (firstPageOnly) break;
+                const hasMore = typeof data.has_more === 'boolean' ? data.has_more : items.length === PAGE_LIMIT;
+                if (!hasMore || items.length === 0) break;
+                offset += items.length;
+            }
+        }
+    }
+
+    function addProjectPreviews(map, cache, projects) {
+        projects.forEach(project => {
+            cache.projects.set(String(project.id), project.title);
+            (project.conversations || []).forEach(item => upsertConversationEntry(map, item, {
+                projectId: project.id,
+                projectTitle: project.title
+            }));
+        });
+    }
+
+    async function fetchProjectConversationPages(map, projects, headers, allowPreviewFallback = false) {
+        let complete = true;
+        await mapWithConcurrency(projects, PROJECT_LIST_CONCURRENCY, async project => {
+            const preview = Array.isArray(project.conversations) ? project.conversations : [];
+            preview.forEach(item => upsertConversationEntry(map, item, {
+                projectId: project.id,
+                projectTitle: project.title
+            }));
+            let cursor = '0';
+            let fetched = false;
+            try {
+                do {
+                    const response = await fetch('/backend-api/gizmos/' + encodeURIComponent(project.id)
+                        + '/conversations?cursor=' + encodeURIComponent(cursor), { headers });
+                    if (!response.ok) throw new Error(t('error.projectConversationListFailed', { status: response.status }));
+                    const data = await response.json();
+                    (Array.isArray(data.items) ? data.items : []).forEach(item => upsertConversationEntry(map, item, {
+                        projectId: project.id,
+                        projectTitle: project.title
+                    }));
+                    cursor = data.cursor || null;
+                    fetched = true;
+                } while (cursor);
+            } catch (err) {
+                if (allowPreviewFallback && !fetched && preview.length > 0) {
+                    complete = false;
+                    console.warn('项目空间列表请求失败，暂时使用侧边栏预览:', project.title, err.message);
+                    return;
+                }
+                throw err;
+            }
+        });
+        return complete;
+    }
+
+    async function listConversations(workspaceId, onUpdate = null) {
+        const cache = loadConversationListCache(workspaceId);
+        const map = cloneConversationEntryMap(cache.entries);
+        const cacheComplete = isConversationListCacheComplete(cache, workspaceId);
+        const cacheFresh = isConversationListCacheFresh(cache, workspaceId);
+        const localList = sortedConversationEntries(map);
+        if (localList.length || cacheComplete) {
+            emitConversationListUpdate(onUpdate, localList, {
+                source: 'local',
+                complete: cacheComplete,
+                refreshing: !cacheFresh
+            });
+        }
+        if (cacheComplete && cacheFresh) {
+            emitConversationListUpdate(onUpdate, localList, {
+                source: 'cache',
+                complete: true,
+                refreshing: false
+            });
+            return localList;
         }
 
-        return Array.from(map.values())
-            .sort((a, b) => (b.update_time || 0) - (a.update_time || 0));
+        const cacheTimestamp = Math.max(
+            cache.rootUpdatedAt || 0,
+            workspaceId ? cache.projectUpdatedAt || 0 : 0
+        );
+        const canIncrement = cacheComplete && cacheTimestamp > 0
+            && Date.now() - cacheTimestamp <= LIST_CACHE_MAX_AGE_MS;
+
+        let rootFetched = false;
+        try {
+            const headers = await getConversationListHeaders(workspaceId);
+            if (canIncrement) {
+                await fetchRootConversationPages(map, headers, true);
+                rootFetched = true;
+                if (workspaceId) {
+                    const projects = await getProjectSpaces(workspaceId, {
+                        conversationsPerGizmo: PROJECT_SIDEBAR_PREVIEW
+                    });
+                    addProjectPreviews(map, cache, projects);
+                    cache.projectUpdatedAt = Date.now();
+                } else {
+                    cache.projectComplete = true;
+                    cache.projectUpdatedAt = Date.now();
+                }
+                cache.entries = map;
+                cache.rootComplete = true;
+                cache.rootUpdatedAt = Date.now();
+                persistConversationListCache(workspaceId, cache);
+                const list = sortedConversationEntries(map);
+                emitConversationListUpdate(onUpdate, list, {
+                    source: 'api',
+                    complete: true,
+                    refreshing: false
+                });
+                return list;
+            }
+
+            await fetchRootConversationPages(map, headers, false);
+            rootFetched = true;
+            cache.rootComplete = true;
+            cache.rootUpdatedAt = Date.now();
+
+            let projectWarning = null;
+            if (workspaceId) {
+                try {
+                    const projects = await getProjectSpaces(workspaceId, {
+                        conversationsPerGizmo: PROJECT_SIDEBAR_PREVIEW
+                    });
+                    addProjectPreviews(map, cache, projects);
+                    const projectsComplete = await fetchProjectConversationPages(map, projects, headers, true);
+                    cache.projectComplete = projectsComplete;
+                    cache.projectUpdatedAt = Date.now();
+                    if (!projectsComplete) projectWarning = t('status.projectPartial');
+                } catch (err) {
+                    cache.projectComplete = false;
+                    projectWarning = err.message;
+                    console.warn('[ChatGPT Exporter] 项目列表补充失败:', err);
+                }
+            } else {
+                cache.projectComplete = true;
+                cache.projectUpdatedAt = Date.now();
+            }
+
+            cache.entries = map;
+            persistConversationListCache(workspaceId, cache);
+            const list = sortedConversationEntries(map);
+            emitConversationListUpdate(onUpdate, list, {
+                source: 'api',
+                complete: cache.rootComplete && (!workspaceId || cache.projectComplete),
+                refreshing: false,
+                warning: projectWarning
+            });
+            return list;
+        } catch (err) {
+            const list = sortedConversationEntries(map);
+            if (list.length || cacheComplete) {
+                if (rootFetched) {
+                    cache.entries = map;
+                    cache.rootComplete = true;
+                    cache.rootUpdatedAt = Date.now();
+                    persistConversationListCache(workspaceId, cache);
+                }
+                emitConversationListUpdate(onUpdate, list, {
+                    source: 'local',
+                    complete: cacheComplete,
+                    refreshing: false,
+                    warning: err.message
+                });
+                return list;
+            }
+            throw err;
+        }
+    }
+
+    async function listProjectSpaceConversations(workspaceId, onUpdate = null) {
+        const resolvedWorkspaceId = resolveWorkspaceId(workspaceId);
+        const cache = loadConversationListCache(resolvedWorkspaceId);
+        const cachedProjects = cloneConversationEntryMap(cache.entries, entry => Boolean(entry.projectId));
+        const cachedList = sortedConversationEntries(cachedProjects, true);
+        const cacheComplete = isConversationListCacheComplete(cache, resolvedWorkspaceId, true);
+        const cacheFresh = isConversationListCacheFresh(cache, resolvedWorkspaceId, true);
+
+        if (cachedList.length || cacheComplete) {
+            emitConversationListUpdate(onUpdate, cachedList, {
+                source: 'local',
+                complete: cacheComplete,
+                refreshing: !cacheFresh
+            });
+        }
+        if (cacheComplete && cacheFresh) {
+            emitConversationListUpdate(onUpdate, cachedList, {
+                source: 'cache',
+                complete: true,
+                refreshing: false
+            });
+            return cachedList;
+        }
+
+        const canIncrement = cacheComplete && cache.projectUpdatedAt
+            && Date.now() - cache.projectUpdatedAt <= LIST_CACHE_MAX_AGE_MS;
+        try {
+            const headers = await getConversationListHeaders(resolvedWorkspaceId);
+            if (canIncrement) {
+                const projects = await getProjectSpaces(resolvedWorkspaceId, {
+                    conversationsPerGizmo: PROJECT_SIDEBAR_PREVIEW,
+                    ownedOnly: true
+                });
+                const map = cloneConversationEntryMap(cachedProjects);
+                addProjectPreviews(map, cache, projects);
+                const combined = cloneConversationEntryMap(cache.entries, entry => !entry.projectId);
+                map.forEach((entry, id) => combined.set(id, entry));
+                cache.entries = combined;
+                cache.projectComplete = true;
+                cache.projectUpdatedAt = Date.now();
+                persistConversationListCache(resolvedWorkspaceId, cache);
+                const list = sortedConversationEntries(map, true);
+                emitConversationListUpdate(onUpdate, list, {
+                    source: 'api',
+                    complete: true,
+                    refreshing: false
+                });
+                return list;
+            }
+
+            const projects = await getProjectSpaces(resolvedWorkspaceId, {
+                conversationsPerGizmo: PROJECT_SIDEBAR_PREVIEW,
+                ownedOnly: true
+            });
+            const map = new Map();
+            addProjectPreviews(map, cache, projects);
+            const projectsComplete = await fetchProjectConversationPages(map, projects, headers, true);
+            const combined = cloneConversationEntryMap(cache.entries, entry => !entry.projectId);
+            map.forEach((entry, id) => combined.set(id, entry));
+            cache.entries = combined;
+            cache.projectComplete = projectsComplete;
+            cache.projectUpdatedAt = Date.now();
+            persistConversationListCache(resolvedWorkspaceId, cache);
+            const list = sortedConversationEntries(map, true);
+            emitConversationListUpdate(onUpdate, list, {
+                source: 'api',
+                complete: projectsComplete,
+                refreshing: false,
+                warning: projectsComplete ? null : t('status.projectPartial')
+            });
+            return list;
+        } catch (err) {
+            if (cachedList.length || cacheComplete) {
+                emitConversationListUpdate(onUpdate, cachedList, {
+                    source: 'local',
+                    complete: cacheComplete,
+                    refreshing: false,
+                    warning: err.message
+                });
+                return cachedList;
+            }
+            throw err;
+        }
     }
 
     async function getConversation(id, workspaceId, retries = 3) {
@@ -1914,6 +2271,9 @@
             archived: 'all',
             timeField: 'update',
             loading: true,
+            refreshing: false,
+            complete: false,
+            warning: '',
             pageSize: 100,
             visibleCount: 100,
             startDate: '',
@@ -2075,7 +2435,7 @@
             const clearAllBtn = dialog.querySelector('#clear-all-btn');
             const controlsDisabled = state.loading;
 
-            if (selectAllBtn) selectAllBtn.disabled = controlsDisabled;
+            if (selectAllBtn) selectAllBtn.disabled = controlsDisabled || state.refreshing || !state.complete;
             if (clearAllBtn) clearAllBtn.disabled = controlsDisabled;
             if (exportBtn) exportBtn.disabled = controlsDisabled || state.selected.size === 0;
 
@@ -2086,12 +2446,18 @@
             }
 
             const visibleCount = Math.min(state.visibleCount, state.filtered.length);
-            statusEl.textContent = t('status.listSummary', {
-                total: state.list.length,
-                filtered: state.filtered.length,
-                visible: visibleCount,
-                selected: state.selected.size
-            });
+            if (state.warning) {
+                statusEl.textContent = t('status.localFallback', { count: state.list.length, message: state.warning });
+            } else if (state.refreshing) {
+                statusEl.textContent = t('status.localSyncing', { count: state.list.length });
+            } else {
+                statusEl.textContent = t('status.listSummary', {
+                    total: state.list.length,
+                    filtered: state.filtered.length,
+                    visible: visibleCount,
+                    selected: state.selected.size
+                });
+            }
             exportBtn.textContent = t('button.exportSelected', { count: state.selected.size });
 
             if (state.filtered.length === 0) {
@@ -2195,17 +2561,34 @@
         document.body.appendChild(overlay);
         overlay.onclick = (e) => { if (e.target === overlay) closeDialog(); };
 
+        const applyListUpdate = (list, meta = {}) => {
+            if (!document.body.contains(overlay)) return;
+            state.list = list;
+            state.loading = false;
+            state.refreshing = Boolean(meta.refreshing);
+            state.complete = Boolean(meta.complete);
+            state.warning = meta.warning || '';
+            applyFilters();
+            renderList();
+        };
         const listPromise = mode === 'project'
-            ? listProjectSpaceConversations(workspaceId)
-            : listConversations(workspaceId);
+            ? listProjectSpaceConversations(workspaceId, applyListUpdate)
+            : listConversations(workspaceId, applyListUpdate);
         listPromise
             .then(list => {
-                state.list = list;
-                state.loading = false;
-                applyFilters();
-                renderList();
+                if (state.loading || state.refreshing) {
+                    applyListUpdate(list, { complete: true, refreshing: false });
+                }
             })
             .catch(err => {
+                if (state.list.length) {
+                    state.loading = false;
+                    state.refreshing = false;
+                    state.warning = err.message;
+                    applyFilters();
+                    renderList();
+                    return;
+                }
                 const statusEl = dialog.querySelector('#conv-status');
                 state.loading = false;
                 state.list = [];
