@@ -218,6 +218,9 @@ async function importZipFile(options) {
 
     updateJob('processing', null, null);
     zipfile = await openZip(archivePath);
+    const declaredEntryCount = Number(zipfile.entryCount) || 0;
+    totalEntries = declaredEntryCount;
+    if (declaredEntryCount > MAX_ARCHIVE_ENTRIES) throw new Error('ZIP contains too many entries');
 
     await new Promise((resolve, reject) => {
       let settled = false;
@@ -242,9 +245,11 @@ async function importZipFile(options) {
           const uncompressedSize = Number(entry.uncompressedSize) || 0;
           const compressedSize = Number(entry.compressedSize) || 0;
 
-          totalEntries += 1;
+          if (!declaredEntryCount) {
+            totalEntries += 1;
+            if (totalEntries > MAX_ARCHIVE_ENTRIES) throw new Error('ZIP contains too many entries');
+          }
           totalBytes += uncompressedSize;
-          if (totalEntries > MAX_ARCHIVE_ENTRIES) throw new Error('ZIP contains too many entries');
           if (uncompressedSize > MAX_ENTRY_BYTES) throw new Error('ZIP entry exceeds the 2 GiB limit: ' + archiveEntryPath);
           if (totalBytes > MAX_TOTAL_UNCOMPRESSED_BYTES) throw new Error('ZIP expands beyond the 50 GiB import limit');
           if (compressedSize > 0 && uncompressedSize / compressedSize > MAX_COMPRESSION_RATIO) {
