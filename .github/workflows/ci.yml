@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - feature/node-sqlite-rich-reader
   pull_request:
     branches:
       - main
