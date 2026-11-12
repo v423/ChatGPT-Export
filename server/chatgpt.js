@@ -18,13 +18,51 @@ function textFromPart(part) {
   return '';
 }
 
-function extractContentText(content) {
+function assetMarkerFromObject(value) {
+  if (!value || typeof value !== 'object') return null;
+  const pointer = value.asset_pointer || value.assetPointer || value.file_id ||
+    value.fileId || value.file_token || value.fileToken || value.attachment_id;
+  if (!pointer || typeof pointer !== 'string') return null;
+  const hint = [
+    value.content_type, value.type, value.mime_type, value.media_type,
+    value.file_type, value.kind
+  ].filter(Boolean).join(' ').toLowerCase();
+  const isImage = hint.includes('image') || Boolean(value.asset_pointer || value.assetPointer);
+  const kind = isImage ? 'image' : 'file';
+  const label = value.filename || value.file_name || value.name || pointer;
+  return '<!-- ' + kind + ':' + (isImage ? pointer : label) + ' -->';
+}
+
+function collectAssetMarkers(value, output, visited, depth) {
+  if (!value || typeof value !== 'object' || depth > 6 || output.size >= 40 || visited.has(value)) return;
+  visited.add(value);
+  const marker = assetMarkerFromObject(value);
+  if (marker) output.set(marker, marker);
+  if (Array.isArray(value)) {
+    value.forEach(item => collectAssetMarkers(item, output, visited, depth + 1));
+    return;
+  }
+  Object.keys(value).forEach(key => {
+    if (['thumbnail', 'preview', 'image_url', 'url'].includes(key)) return;
+    collectAssetMarkers(value[key], output, visited, depth + 1);
+  });
+}
+
+function extractContentText(content, metadata = {}) {
   if (!content || typeof content !== 'object') return '';
   const parts = Array.isArray(content.parts) ? content.parts : [];
   const values = parts.map(textFromPart).filter(Boolean);
-  if (values.length) return values.join('\n');
-  if (typeof content.text === 'string') return content.text;
-  return '';
+  if (!values.length && typeof content.text === 'string') values.push(content.text);
+
+  const markers = new Map();
+  const visited = new Set();
+  collectAssetMarkers(content, markers, visited, 0);
+  collectAssetMarkers(metadata.attachments, markers, visited, 0);
+  collectAssetMarkers(metadata.files, markers, visited, 0);
+  const current = values.join('\n');
+  const missingMarkers = Array.from(markers.keys()).filter(marker => !current.includes(marker));
+  if (missingMarkers.length) values.push(...missingMarkers);
+  return values.join('\n');
 }
 
 function collectCurrentPath(mapping, currentNodeId) {
@@ -79,7 +117,7 @@ function extractMessages(data) {
     const message = item.message;
     const content = message.content || {};
     const metadata = message.metadata || {};
-    const contentText = extractContentText(content);
+    const contentText = extractContentText(content, metadata);
     return {
       messageId: String(message.id || item.nodeId),
       nodeId: String(item.nodeId),
