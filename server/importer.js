@@ -389,7 +389,9 @@ async function importZipFile(options) {
     if (zipfile) {
       try { zipfile.close(); } catch (_) {}
     }
-    await fsp.rm(archivePath, { force: true }).catch(() => {});
+    if (options.deleteArchiveOnFinish) {
+      await fsp.rm(archivePath, { force: true }).catch(() => {});
+    }
   }
 }
 
