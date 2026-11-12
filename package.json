@@ -1,14 +1,17 @@
 {
   "name": "chatgpt-universal-exporter",
-  "version": "1.3.8",
-  "description": "Browser-based ChatGPT conversation exporter with Markdown output and an offline ZIP reader.",
+  "version": "2.0.0",
+  "description": "ChatGPT exporter with a Node.js, SQLite-backed archive reader and rich-content renderer.",
   "license": "MIT",
   "author": "huhu",
   "type": "commonjs",
   "private": false,
   "scripts": {
-    "check": "node --check Tampermonkey.js",
-    "test": "node test/filename.test.js && node test/reader.test.js && node test/security.test.js",
+    "check": "node --check Tampermonkey.js && node --check server/db.js && node --check server/chatgpt.js && node --check server/rich-content.js && node --check server/importer.js && node --check server/index.js && node --check server/cli.js && node --check app/public/app.js",
+    "start": "node server/index.js",
+    "import": "node server/cli.js import",
+    "stats": "node server/cli.js stats",
+    "test": "node test/filename.test.js && node test/reader.test.js && node test/security.test.js && node test/rich-content.test.js && node test/db.test.js && node test/importer.test.js",
     "verify": "npm run check && npm test"
   },
   "keywords": [
@@ -17,7 +20,11 @@
     "tampermonkey",
     "markdown",
     "offline-reader",
-    "backup"
+    "backup",
+    "sqlite",
+    "nodejs",
+    "full-text-search",
+    "rich-content"
   ],
   "repository": {
     "type": "git",
@@ -28,6 +35,14 @@
   },
   "homepage": "https://github.com/OwlCt/ChatGPT-Export#readme",
   "engines": {
-    "node": ">=18"
+    "node": ">=20.11"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.2.0",
+    "marked": "^15.0.12",
+    "mime-types": "^2.1.35",
+    "sanitize-html": "^2.17.0",
+    "yauzl": "^3.2.0",
+    "yazl": "^3.3.1"
   }
 }
