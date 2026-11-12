@@ -124,6 +124,9 @@
       state.items = reset ? result.items : state.items.concat(result.items);
       el('listStatus').textContent = state.total.toLocaleString('zh-CN') + ' 条匹配记录';
       renderList();
+      if (state.hasMore && list.scrollHeight <= list.clientHeight + 12) {
+        window.setTimeout(() => loadConversations(false), 0);
+      }
     } catch (error) {
       el('listStatus').textContent = error.message;
       if (reset) list.innerHTML = '<div class="empty-list">' + escapeHtml(error.message) + '</div>';
@@ -190,11 +193,14 @@
     const before = state.messages[0].sequence;
     try {
       const params = new URLSearchParams({ limit: '80', before: String(before) });
+      const oldHeight = reader.scrollHeight;
+      const oldTop = reader.scrollTop;
       const result = await api('/api/conversations/' + encodeURIComponent(state.selectedId) + '/messages?' + params.toString());
       state.messages = result.items.concat(state.messages);
       state.hasOlder = Boolean(result.hasOlder);
       state.nextBefore = result.nextBefore;
       renderMessages();
+      reader.scrollTop = oldTop + (reader.scrollHeight - oldHeight);
       el('olderContainer').hidden = !state.hasOlder;
     } catch (error) {
       showToast(error.message);
