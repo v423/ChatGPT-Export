@@ -301,3 +301,18 @@ assert.equal(workspaceCache.entries.get('project-chat-1').projectTitle, 'Project
   process.exitCode = 1;
 });
 
+// Root conversations refresh frequently; project lists refresh on a separate 30-minute window.
+const now = Date.now();
+const workspaceFreshness = {
+  rootComplete: true,
+  projectComplete: true,
+  rootUpdatedAt: now - 10 * 60 * 1000,
+  projectUpdatedAt: now - 10 * 60 * 1000,
+};
+assert.equal(helpers.isConversationListCacheFresh(workspaceFreshness, 'ws-123', true), true);
+assert.equal(helpers.isConversationListCacheFresh(workspaceFreshness, 'ws-123'), false);
+workspaceFreshness.rootUpdatedAt = now;
+assert.equal(helpers.isConversationListCacheFresh(workspaceFreshness, 'ws-123'), true);
+workspaceFreshness.projectUpdatedAt = now - 31 * 60 * 1000;
+assert.equal(helpers.isConversationListCacheFresh(workspaceFreshness, 'ws-123'), false);
+
