@@ -20,10 +20,11 @@ Run npm install, then npm start. The service binds to 127.0.0.1:4317 by default.
 
 1. The browser streams the selected ZIP file to the local HTTP service.
 2. The server writes the upload to a temporary file and computes its SHA-256.
-3. yauzl reads one ZIP entry at a time. Unsafe paths, symbolic links, oversized entries, excessive compression ratios, and archives above configured limits are rejected.
-4. Each conversation JSON is parsed independently. The raw JSON is gzip-compressed into SQLite; messages are normalized into rows and DIL AST JSON is stored alongside the original content.
-5. Image and file entries are streamed to a temporary file, hashed, and moved to a SHA-256 content path. Duplicate binary assets share one stored file.
-6. Import progress and per-archive provenance are recorded in import_jobs, import_conversations, and asset_locations.
+3. A worker thread performs decompression, JSON parsing, and synchronous SQLite writes so the HTTP event loop remains responsive while the import runs.
+4. yauzl reads one ZIP entry at a time. Unsafe paths, symbolic links, oversized entries, excessive compression ratios, and archives above configured limits are rejected.
+5. Each conversation JSON is parsed independently. The raw JSON is gzip-compressed into SQLite; messages are normalized into rows and DIL AST JSON is stored alongside the original content.
+6. Image and file entries are streamed to a temporary file, hashed, and moved to a SHA-256 content path. Duplicate binary assets share one stored file.
+7. Import progress and per-archive provenance are recorded in import_jobs, import_conversations, and asset_locations.
 
 The importer is idempotent for identical archives and uses the raw conversation hash to skip unchanged conversations. CLI imports never delete the caller's source ZIP.
 
