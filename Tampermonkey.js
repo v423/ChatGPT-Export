@@ -1596,8 +1596,7 @@
 
         let resolvedWorkspaceId = workspaceId || null;
         if (!resolvedWorkspaceId && (projectMatch || isProjectSidebar)) {
-            const accountMatch = document.cookie.match(/(?:^|; )_account=([^;]+)/);
-            resolvedWorkspaceId = accountMatch?.[1] || null;
+            resolvedWorkspaceId = resolveWorkspaceId(null);
             if (!resolvedWorkspaceId) return;
         }
         const cache = loadConversationListCache(resolvedWorkspaceId);
