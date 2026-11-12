@@ -4,10 +4,13 @@ on:
   push:
     branches:
       - main
+      - security/no-data-egress-hardening
       - feature/node-sqlite-rich-reader
   pull_request:
     branches:
       - main
+      - security/no-data-egress-hardening
+  workflow_dispatch:
 
 permissions:
   contents: read
