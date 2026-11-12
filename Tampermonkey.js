@@ -58,6 +58,7 @@
     const PROJECT_SIDEBAR_LIMIT = 50;
     const LIST_CACHE_VERSION = 1;
     const LIST_CACHE_FRESH_MS = 2 * 60 * 1000;
+    const LIST_CACHE_PROJECT_FRESH_MS = 30 * 60 * 1000;
     const LIST_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
     const LIST_CACHE_MAX_ENTRIES = 12000;
     const PROJECT_LIST_CONCURRENCY = 4;
@@ -1557,12 +1558,12 @@
         const now = Date.now();
         if (projectOnly) {
             return Boolean(cache.projectComplete && cache.projectUpdatedAt
-                && now - cache.projectUpdatedAt <= LIST_CACHE_FRESH_MS);
+                && now - cache.projectUpdatedAt <= LIST_CACHE_PROJECT_FRESH_MS);
         }
         const rootFresh = Boolean(cache.rootComplete && cache.rootUpdatedAt
             && now - cache.rootUpdatedAt <= LIST_CACHE_FRESH_MS);
         const projectsFresh = !workspaceId || Boolean(cache.projectComplete && cache.projectUpdatedAt
-            && now - cache.projectUpdatedAt <= LIST_CACHE_FRESH_MS);
+            && now - cache.projectUpdatedAt <= LIST_CACHE_PROJECT_FRESH_MS);
         return rootFresh && projectsFresh;
     }
 
@@ -1754,13 +1755,14 @@
             if (canIncrement) {
                 await fetchRootConversationPages(map, headers, true);
                 rootFetched = true;
-                if (workspaceId) {
+                if (workspaceId && !isConversationListCacheFresh(cache, workspaceId, true)) {
                     const projects = await getProjectSpaces(workspaceId, {
                         conversationsPerGizmo: PROJECT_SIDEBAR_PREVIEW
                     });
                     addProjectPreviews(map, cache, projects);
+                    cache.projectComplete = await fetchProjectConversationPages(map, projects, headers, true);
                     cache.projectUpdatedAt = Date.now();
-                } else {
+                } else if (!workspaceId) {
                     cache.projectComplete = true;
                     cache.projectUpdatedAt = Date.now();
                 }
@@ -1771,7 +1773,7 @@
                 const list = sortedConversationEntries(map);
                 emitConversationListUpdate(onUpdate, list, {
                     source: 'api',
-                    complete: true,
+                    complete: cache.rootComplete && (!workspaceId || cache.projectComplete),
                     refreshing: false
                 });
                 return list;
@@ -1869,16 +1871,17 @@
                 });
                 const map = cloneConversationEntryMap(cachedProjects);
                 addProjectPreviews(map, cache, projects);
+                const projectsComplete = await fetchProjectConversationPages(map, projects, headers, true);
                 const combined = cloneConversationEntryMap(cache.entries, entry => !entry.projectId);
                 map.forEach((entry, id) => combined.set(id, entry));
                 cache.entries = combined;
-                cache.projectComplete = true;
+                cache.projectComplete = projectsComplete;
                 cache.projectUpdatedAt = Date.now();
                 persistConversationListCache(resolvedWorkspaceId, cache);
                 const list = sortedConversationEntries(map, true);
                 emitConversationListUpdate(onUpdate, list, {
                     source: 'api',
-                    complete: true,
+                    complete: projectsComplete,
                     refreshing: false
                 });
                 return list;
