@@ -1,68 +1,74 @@
 # Node.js + SQLite Reader
 
-## Goals
+## Runtime and storage
 
-- Handle multi-hundred-megabyte daily exports without loading the archive or all conversations into browser memory.
-- Keep message text, conversation metadata, raw conversation JSON, and search indexes in SQLite.
-- Keep binary assets in a local content-addressed file store to avoid bloating the database with large image/file BLOBs.
-- Preserve raw DIL-like component markup and render a safe offline representation.
-
-## Runtime
-
-- Node.js >= 20.11
-- better-sqlite3 for the SQLite binding
-- yauzl for sequential ZIP entry streaming
-- marked + sanitize-html for Markdown parsing and HTML sanitization
-
-Run npm install, then npm start. The service binds to 127.0.0.1:4317 by default. The database is data/chatgpt.sqlite; assets are stored under data/assets/<sha-prefix>/<sha256>.
+- Node.js >= 20.11.
+- better-sqlite3 for SQLite, yauzl for sequential ZIP entry streaming, marked and sanitize-html for Markdown rendering and sanitization.
+- Database: data/chatgpt.sqlite; assets: data/assets/<sha-prefix>/<sha256>.
+- The service binds to 127.0.0.1:4317 by default. Remote binding requires CHATGPT_EXPORT_ALLOW_REMOTE=1.
 
 ## Import pipeline
 
-1. The browser streams the selected ZIP file to the local HTTP service.
+1. The browser streams the selected ZIP to the local HTTP service.
 2. The server writes the upload to a temporary file and computes its SHA-256.
-3. A worker thread performs decompression, JSON parsing, and synchronous SQLite writes so the HTTP event loop remains responsive while the import runs.
-4. yauzl reads one ZIP entry at a time. Unsafe paths, symbolic links, oversized entries, excessive compression ratios, and archives above configured limits are rejected.
-5. Each conversation JSON is parsed independently. The raw JSON is gzip-compressed into SQLite; messages are normalized into rows and DIL AST JSON is stored alongside the original content.
-6. Image and file entries are streamed to a temporary file, hashed, and moved to a SHA-256 content path. Duplicate binary assets share one stored file.
-7. Import progress and per-archive provenance are recorded in import_jobs, import_conversations, and asset_locations.
+3. A worker thread performs decompression, JSON parsing, and synchronous SQLite writes so the HTTP event loop remains responsive.
+4. yauzl reads one ZIP entry at a time. Path traversal, symlinks, oversized entries, extreme compression ratios, and archives above configured limits are rejected.
+5. Each conversation JSON is parsed independently. Original JSON is gzip-compressed into SQLite; messages are normalized into rows and a DIL AST is stored alongside the original text.
+6. Images and files are streamed to temporary files, hashed, and moved to content-addressed paths. Duplicate binary assets share one stored file.
+7. Import progress and provenance are recorded in import_jobs, import_conversations, and asset_locations.
 
-The importer is idempotent for identical archives and uses the raw conversation hash to skip unchanged conversations. CLI imports never delete the caller's source ZIP.
+Identical completed archives are skipped. CLI imports never delete the caller's source ZIP.
 
 ## SQLite model
 
-- conversations: conversation identity, title, project path, timestamps, raw JSON gzip BLOB, source hash, import provenance.
-- messages: one row per message with parent/node IDs, sequence, role, channel, content text/JSON, metadata, DIL AST, and current-path flag.
-- messages_fts: FTS5 index for title and message text; a LIKE fallback is used when FTS5 is unavailable.
-- assets and asset_locations: content-addressed file metadata and per-import archive paths.
-- import_jobs: upload/import status, progress, counts, and errors.
+- conversations: identity, title, project path, timestamps, raw JSON gzip BLOB, source hash, import provenance.
+- messages: node/message IDs, parent IDs, sequence, role, channel, content text/JSON, metadata, DIL AST, current-path flag.
+- messages_fts: FTS5 index for title and message text; LIKE fallback when FTS5 is unavailable.
+- assets and asset_locations: content-addressed asset metadata and per-import archive paths.
+- import_jobs: import status, progress, counts, and errors.
 
-SQLite uses WAL, foreign keys, a bounded page cache, and prepared statements. Message pages are fetched by sequence; the browser never receives the entire database.
+SQLite uses WAL, foreign keys, a bounded page cache, and prepared statements. Message pages select only the columns needed for rendering; ordinary reader requests do not load the raw JSON BLOB, full content JSON, or stored AST. Message pages are fetched by sequence.
 
 ## HTTP API
 
 - GET /api/health
 - GET /api/stats
-- GET /api/conversations?limit=50&offset=0&q=...
+- GET /api/conversations?limit=50&offset=0&q=...&project=...
 - GET /api/conversations/:id?limit=80
 - GET /api/conversations/:id/messages?before=<sequence>&limit=80
 - GET /api/imports/:id
-- POST /api/import with the ZIP file as the request body and X-File-Name
+- POST /api/import with the ZIP body and X-File-Name
 - GET /api/assets/:sha256
 
-The server binds to loopback by default and does not enable CORS. Remote binding requires an explicit CHATGPT_EXPORT_ALLOW_REMOTE=1 opt-in.
+CJK substring search uses SQLite LIKE rather than relying only on unicode61 token matching. Project filters are applied in SQL before pagination.
 
 ## Rich content
 
-The renderer parses known component tags without evaluating JavaScript expressions. It supports layout components (row, col, box, grid), text and badges, entities, citation references, safe links, tables, chart SVG, Mermaid-style flowcharts, code blocks, and static map/location summaries.
+The renderer parses a safe subset of DIL without evaluating expressions or executing embedded JavaScript.
 
-- Cite refs are preserved as citation chips; a source link is shown only when exported message metadata contains a matching URL.
-- AsyncImage query is rendered as a placeholder because a search query is not an exported image asset. External images are never fetched automatically.
-- Markdown image references only render as images when they resolve to a local /api/assets/<sha256> resource.
-- Unknown component tags are shown as safe placeholders rather than executed.
+- Layout: row, col, box, grid, flow, card, table, divider, spacer.
+- Text/data: text, title, caption, label, badge, entity, citations, safe links, code, math.
+- Media: local images, AsyncImage placeholders, AsyncVideo placeholders/local media, and file references.
+- Structured content: Markdown/DIL tables, bar/line/scatter/pie charts, common Mermaid flowcharts, static MapWidgetV2 summaries, CodeBlock and WritingBlock.
+- AppBlock: source/placeholder only. Arbitrary HTML/JavaScript is never executed.
+- Cite refs remain visible. A citation becomes a clickable link only when the exported metadata contains a matching source URL.
+- AsyncImage query is displayed as a placeholder if the export has no local binary. External images are not fetched.
+- Raw HTML image tags lose remote src attributes. SVG paint values and marker references are restricted to safe values/local fragments.
+- Markdown images display only when they resolve to a local /api/assets/<sha256> path.
 
-## Current limits / follow-up
+The Mermaid renderer covers common flowchart/graph node-and-edge syntax, not the full Mermaid grammar. Unsupported component forms must remain visible as a safe fallback.
 
-- The importer currently targets ZIPs produced by this exporter: conversation JSON plus images/ and files/ folders. Markdown-only archives are not yet indexed.
-- The Mermaid renderer intentionally supports common flowchart / graph node-and-edge syntax, not the complete Mermaid language.
-- The reader loads the latest 80 messages and fetches earlier pages on demand. A single message with an exceptionally large payload is still returned as one unit.
-- Existing reader/index.html remains as a legacy browser-only reader for small archives; it is not the recommended path for large datasets.
+## Asset delivery and safety
+
+- Only safe raster image formats and audio/video media are served inline.
+- HTML, SVG, scripts, documents, and other files are served as attachments with nosniff and a restrictive content security policy.
+- The reader does not automatically load remote images.
+- The server has no CORS allowance and binds to loopback by default.
+
+## Current limits
+
+- The importer targets this exporter's ZIP layout: conversation JSON plus images/ and files/ folders. Markdown-only ZIP archives are not indexed yet.
+- A single unusually large message is still returned as one page item.
+- The new Node.js reader does not yet provide its own PDF/print export; the legacy static reader retains its print/PDF workflow.
+- Full DIL/Mermaid parity is not claimed.
+- A 100 MB+ real-world archive benchmark and complete automated CI pass are still pending.

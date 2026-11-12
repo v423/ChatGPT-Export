@@ -5,12 +5,13 @@
 
 [简体中文](README_CN.md) · [繁體中文](README_TW.md)
 
-ChatGPT Universal Exporter exports ChatGPT conversations to a local ZIP archive and provides a companion offline reader for browsing, searching, and archiving them. All processing happens locally in the browser; nothing is sent through a server.
+ChatGPT Universal Exporter exports ChatGPT conversations to a local ZIP archive. Large archives are read through a local Node.js + SQLite application with streaming ZIP import, paginated queries, and full-text search. Conversation data stays on the user's machine.
 
-The project has two parts:
+The project has three parts:
 
-- `Tampermonkey.js` — a userscript that runs on ChatGPT pages and packages conversations into a ZIP download.
-- `reader/index.html` — an offline reader that imports a ZIP for browsing, search, caching, and PDF export, and can be deployed as a static site.
+- `Tampermonkey.js` — a userscript that runs on ChatGPT pages and packages raw JSON, Markdown, images, and attachments into a ZIP download.
+- `server/` and `app/public/` — a local Node.js + SQLite reader for large archives.
+- `reader/index.html` — the legacy browser-only reader, retained for small archives and its existing print/PDF workflow.
 
 It is intended for personal backups, archiving project and team-workspace conversations, and reading through history offline.
 
@@ -20,7 +21,7 @@ It is intended for personal backups, archiving project and team-workspace conver
 - **Dual-format output** — every conversation is saved as both raw JSON and converted Markdown, suited to indexing and reading respectively, with project folder structure preserved.
 - **Asset extraction** — generated images and uploaded attachments are saved into `images/` and `files/` whenever a download URL is available in the conversation metadata.
 - **Reading and search** — the reader supports title and full-text search, message and code-block copying, image preview, and local file links.
-- **Local caching** — imported conversations and attachments are persisted in browser IndexedDB, so reopening requires no re-import.
+- **Local database** — the new reader persists conversations, messages, and search indexes in SQLite; binary assets use content-addressed files. The legacy static reader still uses IndexedDB.
 - **Interface and export** — the UI switches between English, Simplified Chinese, and Traditional Chinese with light/dark/system themes and configurable import preferences; the current conversation exports to a PDF whose text remains selectable.
 - **Reading experience** — the sidebar counts by user turn (one prompt and its following reply count as a single item), and longer conversations provide a jump rail on the right.
 
@@ -41,9 +42,9 @@ Conversations and their images and attachments are fetched one at a time through
 
 ### Read An Export
 
-Open the deployed `index.html` in a modern browser and drag a ZIP onto the page (or choose it from the file picker); the conversations are then listed in the sidebar. Search, copy, image preview, source panels, local file links, and PDF export are all available as needed.
+For large archives, install Node.js 20.11 or newer, then run `npm install` and `npm start` in the repository. Open `http://127.0.0.1:4317` and import the ZIP. The importer streams entries through a worker thread into `data/chatgpt.sqlite`; assets are stored under `data/assets/`. The browser requests only paginated conversation and message data.
 
-The reader runs entirely on your machine. After the first import, conversations and assets remain in the current browser until the cache is cleared manually.
+The legacy `reader/index.html` remains available for smaller ZIP files and its existing print/PDF workflow.
 
 ## ZIP Layout
 
@@ -72,9 +73,13 @@ Each JSON file is the raw conversation data returned by ChatGPT. Each Markdown f
 
 `Tampermonkey.js` runs inside ChatGPT pages and uses the current logged-in browser session to call ChatGPT's own backend APIs. It identifies the session token from same-origin requests, discovers the available workspaces and projects, lists and filters conversations, downloads each conversation's JSON and converts it to Markdown, extracts images and attachments where available, and finally packages everything into a ZIP with JSZip — sanitizing illegal filename characters and resolving name collisions in the process.
 
-### Static Reader
+### Node.js + SQLite Reader
 
-`index.html` is a local-first static web page. JSZip is loaded directly from the repository's `reader/vendor/` directory rather than a CDN. It parses the ZIP in the browser, persists conversations, images, and attachments in IndexedDB, creates accessible URLs for local images and files, and handles search, sidebar grouping, message rendering, code and table copy controls, image preview, and source panels. Interface language, theme, and import preferences are managed here as well. PDF export carries through images and source references, and user-turn counting and long-conversation jump navigation are implemented on this side.
+`server/` provides the local HTTP API, SQLite database, and streaming ZIP importer. Raw conversation JSON is gzip-compressed in SQLite; messages are normalized and paginated; FTS5 supports full-text search, with a LIKE fallback for CJK substring search. Images and attachments are stored by SHA-256 in a local asset directory. The lightweight `app/public/` frontend requests only conversation and message pages.
+
+### Legacy Static Reader
+
+`reader/index.html` retains the original browser-only reader and IndexedDB storage. It is suitable for smaller archives; it is not recommended for daily multi-hundred-megabyte datasets. Its print/PDF workflow remains available.
 
 ### Tests
 
@@ -85,7 +90,9 @@ The `test/` directory contains a set of Node-based static checks covering the us
 - The export process runs entirely in your local browser; this project does not send any conversation content to a third party.
 - The userscript takes effect only on the ChatGPT domains declared in its metadata and accesses conversation data through the current logged-in session.
 - The exporter does not send conversation content, access tokens, or attachments to unrelated third-party services. Cross-origin asset downloads are limited to OpenAI-owned hosts and omit cookies, authorization headers, and referrers.
-- The offline reader does not automatically load remote images; external image references remain available as user-clickable links.
+- The new reader does not automatically load remote images, including raw HTML image tags; remote src values are removed.
+- HTML, SVG, scripts, and document attachments are served as downloads rather than rendered inline in the local reader.
+- The Node.js reader binds to 127.0.0.1 by default and stores data in local SQLite and asset files.
 - The conversation picker keeps only list metadata (IDs, titles, timestamps, archive state, and project labels) in the current tab's `sessionStorage` for up to 7 days. Complete lists are reused immediately and refreshed incrementally; message bodies and access tokens are never stored in this cache.
 - Imported content is stored only in the current browser's IndexedDB and is never uploaded to a server.
 
@@ -96,7 +103,7 @@ The `test/` directory contains a set of Node-based static checks covering the us
 ## Known Limits
 
 - ChatGPT's backend APIs are private and may change without notice.
-- The offline reader limits imports to 512 MiB compressed, 2 GiB uncompressed, 512 MiB per entry, and 100,000 ZIP entries to reduce browser resource-exhaustion risk. Split larger exports into multiple archives.
+- The Node.js importer limits individual entries to 2 GiB, individual conversation JSON to 256 MiB, total expansion to 50 GiB, and archives to 500,000 entries; HTTP upload is capped at 20 GiB. The legacy static reader retains its smaller browser limits.
 - Very large exports may run into browser memory or rate-limit constraints.
 - Whether images and attachments can be exported depends on the resource metadata present in each conversation.
 - Some team workspaces require opening a team conversation first before the script can detect the workspace.
