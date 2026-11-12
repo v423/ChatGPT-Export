@@ -1681,14 +1681,16 @@
         }
     }
 
-    function addProjectPreviews(map, cache, projects) {
-        const activeProjectIds = new Set(projects.map(project => String(project.id)));
-        for (const [id, entry] of map) {
-            if (entry.projectId && !activeProjectIds.has(String(entry.projectId))) {
-                map.delete(id);
+    function addProjectPreviews(map, cache, projects, pruneMissingProjects = false) {
+        if (pruneMissingProjects) {
+            const activeProjectIds = new Set(projects.map(project => String(project.id)));
+            for (const [id, entry] of map) {
+                if (entry.projectId && !activeProjectIds.has(String(entry.projectId))) {
+                    map.delete(id);
+                }
             }
+            cache.projects.clear();
         }
-        cache.projects.clear();
         projects.forEach(project => {
             cache.projects.set(String(project.id), project.title);
             (project.conversations || []).forEach(item => upsertConversationEntry(map, item, {
@@ -1700,6 +1702,7 @@
 
     async function fetchProjectConversationPages(map, projects, headers, options = {}) {
         const allowPreviewFallback = Boolean(options.allowPreviewFallback);
+        const firstPageOnlyProjectIds = options.firstPageOnlyProjectIds instanceof Set ? options.firstPageOnlyProjectIds : null;
         const firstPageOnly = Boolean(options.firstPageOnly);
         let complete = true;
         await mapWithConcurrency(projects, PROJECT_LIST_CONCURRENCY, async project => {
@@ -1720,7 +1723,8 @@
                         projectId: project.id,
                         projectTitle: project.title
                     }));
-                    cursor = firstPageOnly ? null : (data.cursor || null);
+                    const projectFirstPageOnly = firstPageOnly || Boolean(firstPageOnlyProjectIds && firstPageOnlyProjectIds.has(String(project.id)));
+                    cursor = projectFirstPageOnly ? null : (data.cursor || null);
                     fetched = true;
                 } while (cursor);
             } catch (err) {
@@ -1774,8 +1778,9 @@
                     const projects = await getProjectSpaces(workspaceId, {
                         conversationsPerGizmo: PROJECT_SIDEBAR_PREVIEW
                     });
-                    addProjectPreviews(map, cache, projects);
-                    cache.projectComplete = await fetchProjectConversationPages(map, projects, headers, { allowPreviewFallback: true, firstPageOnly: true });
+                    const knownProjectIds = new Set(cache.projects.keys());
+                    addProjectPreviews(map, cache, projects, true);
+                    cache.projectComplete = await fetchProjectConversationPages(map, projects, headers, { allowPreviewFallback: true, firstPageOnlyProjectIds: knownProjectIds });
                     cache.projectUpdatedAt = Date.now();
                 } else if (!workspaceId) {
                     cache.projectComplete = true;
@@ -1805,7 +1810,7 @@
                     const projects = await getProjectSpaces(workspaceId, {
                         conversationsPerGizmo: PROJECT_SIDEBAR_PREVIEW
                     });
-                    addProjectPreviews(map, cache, projects);
+                    addProjectPreviews(map, cache, projects, true);
                     const projectsComplete = await fetchProjectConversationPages(map, projects, headers, { allowPreviewFallback: true });
                     cache.projectComplete = projectsComplete;
                     cache.projectUpdatedAt = Date.now();
@@ -1885,8 +1890,9 @@
                     ownedOnly: true
                 });
                 const map = cloneConversationEntryMap(cachedProjects);
+                const knownProjectIds = new Set(cache.projects.keys());
                 addProjectPreviews(map, cache, projects);
-                const projectsComplete = await fetchProjectConversationPages(map, projects, headers, { allowPreviewFallback: true, firstPageOnly: true });
+                const projectsComplete = await fetchProjectConversationPages(map, projects, headers, { allowPreviewFallback: true, firstPageOnlyProjectIds: knownProjectIds });
                 const combined = cloneConversationEntryMap(cache.entries, entry => !entry.projectId);
                 map.forEach((entry, id) => combined.set(id, entry));
                 cache.entries = combined;

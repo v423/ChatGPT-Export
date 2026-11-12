@@ -30,6 +30,9 @@ assert.ok(captureStart >= 0 && captureEnd > captureStart, 'workspace observer sh
 const captureBlock = tm.slice(captureStart, captureEnd);
 assert.match(captureBlock, /ChatGPT-Account-Id/, 'workspace observer should read the workspace header');
 assert.doesNotMatch(captureBlock, /headers\.get\(['"]Authorization['"]\)|tryCaptureToken/, 'workspace observer must not inspect authorization headers');
+assert.match(tm, /firstPageOnlyProjectIds/, 'warm project caches should refresh only the newest page for previously indexed projects');
+assert.match(tm, /mappingKeys\.forEach\(nodeId => \{\s*if \(!visited\.has\(nodeId\)\) traverse\(nodeId\);\s*\}\);/, 'Markdown export should include orphan mapping nodes');
+assert.doesNotMatch(tm, /node\.children\.forEach\(childId => traverse\(childId\)\)/, 'Markdown traversal must not recurse deeply');
 
 const assetHelperStart = tm.indexOf('const TRUSTED_ASSET_DOMAINS');
 const assetHelperEnd = tm.indexOf('async function fetchImageBlob', assetHelperStart);
