@@ -8,6 +8,7 @@ const path = require('node:path');
 const yazl = require('yazl');
 const { openDatabase, closeDatabase } = require('../server/db');
 const { importZipFile } = require('../server/importer');
+const { replaceAssetMarkers } = require('../server/index');
 
 async function writeFixtureZip(filename, conversation) {
   const zip = new yazl.ZipFile();
@@ -43,7 +44,7 @@ async function main() {
           id: 'user-message',
           author: { role: 'user' },
           create_time: 1700000000,
-          content: { content_type: 'text', parts: ['Please summarize this.'] }
+          content: { content_type: 'text', parts: ['Please summarize this.', { content_type: 'image_asset_pointer', asset_pointer: 'file_abc123' }] }
         }
       },
       'assistant-node': {
@@ -80,6 +81,12 @@ async function main() {
     assert.equal(fs.existsSync(archivePath), true, 'CLI/source archives must not be deleted');
     assert.equal(db.prepare('SELECT COUNT(*) AS count FROM messages').get().count, 2);
     assert.equal(db.prepare('SELECT COUNT(*) AS count FROM assets').get().count, 1);
+    const userMessage = db.prepare('SELECT content_text FROM messages WHERE message_id = ?').get('user-message');
+    assert.match(userMessage.content_text, /<!-- image:file_abc123 -->/);
+    const asset = db.prepare('SELECT sha256 FROM assets').get();
+    const location = db.prepare('SELECT archive_path, filename, kind, sha256 FROM asset_locations').get();
+    const markdownWithLocalImage = replaceAssetMarkers(userMessage.content_text, [{ ...location, ...asset }]);
+    assert.match(markdownWithLocalImage, /!\[图片\]\(\/api\/assets\/[a-f0-9]{64}\)/);
     const stored = db.prepare('SELECT dil_ast_json FROM messages WHERE message_id = ?').get('assistant-message');
     assert.match(stored.dil_ast_json, /Entity/);
   } finally {
