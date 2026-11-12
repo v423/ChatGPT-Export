@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { Worker } = require('node:worker_threads');
 const { Transform } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
 const mime = require('mime-types');
@@ -202,6 +203,7 @@ function createServer(options = {}) {
   const host = options.host || process.env.HOST || '127.0.0.1';
   const port = Number(options.port ?? process.env.PORT ?? 4317);
   const db = options.db || openDatabase(dbPath);
+  const importWorkers = new Set();
 
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url || '/', 'http://127.0.0.1');
@@ -331,18 +333,52 @@ function createServer(options = {}) {
 
         db.prepare('UPDATE import_jobs SET status = ? WHERE id = ?').run('queued', jobId);
         sendJson(response, 202, { jobId, status: 'queued', filename });
-        setImmediate(() => {
-          importZipFile({
-            db,
-            archivePath,
-            dataDir,
-            jobId,
-            filename,
-            deleteArchiveOnFinish: true
-          }).catch(error => {
-            console.error('[ChatGPT Exporter] Import failed:', error);
+        if (options.db) {
+          // In-memory databases are not shared between worker threads; keep test/custom DBs on this connection.
+          setImmediate(() => {
+            importZipFile({
+              db,
+              archivePath,
+              dataDir,
+              jobId,
+              filename,
+              deleteArchiveOnFinish: true
+            }).catch(error => {
+              console.error('[ChatGPT Exporter] Import failed:', error);
+            });
           });
-        });
+        } else {
+          // Keep ZIP decompression, JSON parsing, and synchronous SQLite writes off the HTTP event loop.
+          const worker = new Worker(path.join(__dirname, 'import-worker.js'), {
+            workerData: { dbPath, dataDir, archivePath, jobId, filename }
+          });
+          importWorkers.add(worker);
+          let workerMessageReceived = false;
+          let failureHandled = false;
+          const markWorkerFailed = error => {
+            if (failureHandled) return;
+            failureHandled = true;
+            try {
+              db.prepare('UPDATE import_jobs SET status = ?, error = ?, finished_at = ? WHERE id = ?')
+                .run('failed', error.message || String(error), Date.now(), jobId);
+            } catch (_) {}
+            fsp.rm(archivePath, { force: true }).catch(() => {});
+            console.error('[ChatGPT Exporter] Import worker failed:', error);
+          };
+          worker.on('message', message => {
+            workerMessageReceived = true;
+            if (!message || !message.ok) {
+              markWorkerFailed(new Error(message && message.error ? message.error : 'Import worker returned an invalid result'));
+            }
+          });
+          worker.on('error', markWorkerFailed);
+          worker.on('exit', code => {
+            importWorkers.delete(worker);
+            if (!workerMessageReceived || code !== 0) {
+              markWorkerFailed(new Error('Import worker exited unexpectedly with code ' + code));
+            }
+          });
+        }
         return;
       }
 
