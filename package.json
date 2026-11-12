@@ -11,7 +11,7 @@
     "start": "node server/index.js",
     "import": "node server/cli.js import",
     "stats": "node server/cli.js stats",
-    "test": "node test/filename.test.js && node test/reader.test.js && node test/security.test.js && node test/rich-content.test.js && node test/db.test.js && node test/importer.test.js",
+    "test": "node test/filename.test.js && node test/reader.test.js && node test/security.test.js && node test/rich-content.test.js && node test/db.test.js && node test/importer.test.js && node test/server.test.js",
     "verify": "npm run check && npm test"
   },
   "keywords": [
