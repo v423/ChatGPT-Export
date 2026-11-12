@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>ChatGPT SQLite Reader</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">C</div>
+        <div>
+          <strong>ChatGPT Archive</strong>
+          <span>本地 SQLite 对话库</span>
+        </div>
+      </div>
+      <div class="top-actions">
+        <div id="stats" class="stats">正在读取数据库…</div>
+        <input id="zipInput" type="file" accept=".zip,application/zip" hidden>
+        <button id="importButton" class="primary-button" type="button">导入 ZIP</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <aside class="sidebar">
+        <div class="sidebar-heading">
+          <div>
+            <strong>对话记录</strong>
+            <span id="conversationCount">0 条记录</span>
+          </div>
+        </div>
+        <label class="search-box">
+          <span aria-hidden="true">⌕</span>
+          <input id="searchInput" type="search" placeholder="搜索标题和消息内容…" autocomplete="off">
+          <kbd>⌘ K</kbd>
+        </label>
+        <div id="listStatus" class="list-status"></div>
+        <div id="conversationList" class="conversation-list" aria-live="polite">
+          <div class="empty-list">还没有导入记录</div>
+        </div>
+        <div class="sidebar-footer">
+          <span id="storageLabel">数据保存在本机</span>
+          <button id="refreshButton" class="quiet-button" type="button" title="刷新列表">↻</button>
+        </div>
+      </aside>
+
+      <section class="reader">
+        <div id="emptyState" class="empty-state">
+          <div class="empty-icon">▤</div>
+          <h1>你的对话档案库</h1>
+          <p>导入 ChatGPT 导出的 ZIP。记录会流式写入本地 SQLite，不需要把整份数据放进浏览器存储。</p>
+          <button id="emptyImportButton" class="primary-button" type="button">选择 ZIP 文件</button>
+        </div>
+
+        <div id="conversationHeader" class="conversation-header" hidden>
+          <div class="conversation-heading">
+            <h1 id="conversationTitle"></h1>
+            <div id="conversationMeta" class="conversation-meta"></div>
+          </div>
+          <div id="conversationActions" class="conversation-actions"></div>
+        </div>
+
+        <div id="messages" class="messages" hidden></div>
+        <div id="olderContainer" class="older-container" hidden>
+          <button id="loadOlderButton" class="quiet-button" type="button">加载更早的消息</button>
+        </div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <div id="importPanel" class="import-panel" hidden>
+      <div class="import-panel-top">
+        <strong id="importTitle">正在导入</strong>
+        <span id="importPercent">处理中</span>
+      </div>
+      <div class="progress-track"><div id="importProgress" class="progress-value"></div></div>
+      <div id="importDetails" class="import-details"></div>
+    </div>
+  </div>
+</body>
+</html>
