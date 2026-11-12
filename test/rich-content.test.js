@@ -36,10 +36,10 @@ assert.match(html, /https:\/\/f-droid\.org/);
 assert.doesNotMatch(html, /<img[^>]+src="https?:/i);
 
 const rawRemoteImage = renderRichContent('<img src="https://tracker.example/pixel.png" alt="tracking"/>');
-assert.doesNotMatch(rawRemoteImage, /tracker\\.example/);
+assert.doesNotMatch(rawRemoteImage, /tracker\.example/);
 assert.match(rawRemoteImage, /alt="tracking"/);
 const localImage = renderRichContent('<img src="/api/assets/' + 'a'.repeat(64) + '" alt="local"/>');
-assert.match(localImage, /src="\\/api\\/assets\\//);
+assert.ok(localImage.includes('src="/api/assets/'));
 
 const video = renderRichContent('<AsyncVideo query="demo video"/>');
 assert.match(video, /视频引用/);

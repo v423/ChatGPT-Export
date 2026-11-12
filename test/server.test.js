@@ -4,7 +4,6 @@ const assert = require('node:assert/strict');
 const os = require('node:os');
 const path = require('node:path');
 const fs = require('node:fs/promises');
-const path = require('node:path');
 const { openDatabase, closeDatabase } = require('../server/db');
 const { createServer } = require('../server/index');
 
