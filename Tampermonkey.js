@@ -1742,12 +1742,12 @@
             return localList;
         }
 
-        const cacheTimestamp = Math.max(
-            cache.rootUpdatedAt || 0,
-            workspaceId ? cache.projectUpdatedAt || 0 : 0
-        );
-        const canIncrement = cacheComplete && cacheTimestamp > 0
-            && Date.now() - cacheTimestamp <= LIST_CACHE_MAX_AGE_MS;
+        const now = Date.now();
+        const rootCacheReusable = cache.rootUpdatedAt > 0
+            && now - cache.rootUpdatedAt <= LIST_CACHE_MAX_AGE_MS;
+        const projectCacheReusable = !workspaceId || (cache.projectUpdatedAt > 0
+            && now - cache.projectUpdatedAt <= LIST_CACHE_MAX_AGE_MS);
+        const canIncrement = cacheComplete && rootCacheReusable && projectCacheReusable;
 
         let rootFetched = false;
         try {
