@@ -278,7 +278,7 @@ function sanitizeMarkdown(html) {
     allowedTags: [
       'a', 'p', 'br', 'strong', 'em', 'del', 'code', 'pre', 'blockquote',
       'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr',
-      'table', 'thead', 'tbody', 'tr', 'th', 'td', 'span', 'div', 'sup', 'sub', 'img'
+      'table', 'thead', 'tbody', 'tr', 'th', 'td', 'span', 'div', 'sup', 'sub', 'img', 'svg', 'defs', 'marker', 'path', 'line', 'rect', 'circle', 'ellipse', 'polygon', 'polyline', 'g', 'text'
     ],
     allowedAttributes: {
       a: ['href', 'title', 'target', 'rel'],
@@ -286,7 +286,19 @@ function sanitizeMarkdown(html) {
       pre: ['class'],
       th: ['align', 'colspan'],
       td: ['align', 'colspan'],
-      img: ['src', 'alt', 'class']
+      img: ['src', 'alt', 'class'],
+      svg: ['class', 'viewBox', 'role', 'aria-label'],
+      defs: [],
+      marker: ['id', 'markerWidth', 'markerHeight', 'refX', 'refY', 'orient'],
+      path: ['d', 'fill'],
+      line: ['x1', 'y1', 'x2', 'y2', 'stroke', 'stroke-width', 'marker-end'],
+      rect: ['x', 'y', 'width', 'height', 'rx'],
+      circle: ['cx', 'cy', 'r', 'fill'],
+      ellipse: ['cx', 'cy', 'rx', 'ry'],
+      polygon: ['points'],
+      polyline: ['points', 'fill', 'stroke', 'stroke-width'],
+      g: ['class'],
+      text: ['x', 'y', 'text-anchor']
     },
     allowedSchemes: ['http', 'https', 'mailto'],
     transformTags: {
@@ -560,7 +572,7 @@ function renderElement(node, options) {
     return '<span class="dil-entity"><small>' + escapeHtml(category) + '</small><strong>' + escapeHtml(value) + '</strong></span>';
   }
   if (name === 'Cite' || name === 'CodeCite' || name === 'FileCite') {
-    const refs = Array.isArray(attributes.refs) ? attributes.refs : [attributes.ref || attributes.citation_id || childText];
+    const refs = Array.isArray(attributes.refs) ? attributes.refs : [attributes.refs || attributes.ref || attributes.citation_id || childText];
     const sourceList = Array.isArray(options.sources) ? options.sources : [];
     return '<span class="dil-citations">' + refs.filter(Boolean).map(ref => {
       const source = sourceList.find(item => item && (item.ref_id === ref || item.id === ref || item.turn_id === ref));
