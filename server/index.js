@@ -445,7 +445,12 @@ function createServer(options = {}) {
   });
 
   server.on('close', () => {
-    if (!options.db) db.close();
+    if (options.db) return;
+    const closeWhenIdle = () => {
+      if (!importWorkers.size && db.open) db.close();
+    };
+    if (!importWorkers.size) closeWhenIdle();
+    else importWorkers.forEach(worker => worker.once('exit', closeWhenIdle));
   });
 
   return {
