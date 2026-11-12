@@ -65,7 +65,7 @@ function replaceAssetMarkers(content, assets) {
     const pointer = normalizedAssetName(rawPointer.trim());
     const asset = list.find(item => item.kind === 'image' &&
       (normalizedAssetName(item.filename).includes(pointer) || normalizedAssetName(item.archive_path).includes(pointer)));
-    if (!asset) return '';
+    if (!asset) return '\n\n[图片资源未找到：' + rawPointer.trim() + ']\n\n';
     return '\n\n![图片](/api/assets/' + asset.sha256 + ')\n\n';
   });
   text = text.replace(/<!--\s*file:([^>]+?)\s*-->/g, (_, rawKey) => {
