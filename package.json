@@ -7,7 +7,7 @@
   "type": "commonjs",
   "private": false,
   "scripts": {
-    "check": "node --check Tampermonkey.js && node --check server/db.js && node --check server/chatgpt.js && node --check server/rich-content.js && node --check server/importer.js && node --check server/index.js && node --check server/cli.js && node --check app/public/app.js",
+    "check": "node --check Tampermonkey.js && node --check server/db.js && node --check server/chatgpt.js && node --check server/rich-content.js && node --check server/importer.js && node --check server/index.js && node --check server/cli.js && node --check server/import-worker.js && node --check app/public/app.js",
     "start": "node server/index.js",
     "import": "node server/cli.js import",
     "stats": "node server/cli.js stats",
