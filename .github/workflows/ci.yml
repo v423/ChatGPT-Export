@@ -4,9 +4,13 @@ on:
   push:
     branches:
       - main
+      - security/no-data-egress-hardening
+      - feature/node-sqlite-rich-reader
   pull_request:
     branches:
       - main
+      - security/no-data-egress-hardening
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -23,6 +27,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
 
       - name: Verify scripts and tests
         run: npm run verify

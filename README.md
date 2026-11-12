@@ -83,24 +83,20 @@ The `test/` directory contains a set of Node-based static checks covering the us
 ## Privacy And Security
 
 - The export process runs entirely in your local browser; this project does not send any conversation content to a third party.
-- The userscript takes effect only on the ChatGPT domains declared in its metadata, and accesses the APIs through the current logged-in session.
-- Once deployed, the reader depends on no third-party runtime CDN.
+- The userscript takes effect only on the ChatGPT domains declared in its metadata and accesses conversation data through the current logged-in session.
+- The exporter does not send conversation content, access tokens, or attachments to unrelated third-party services. Cross-origin asset downloads are limited to OpenAI-owned hosts and omit cookies, authorization headers, and referrers.
+- The offline reader does not automatically load remote images; external image references remain available as user-clickable links.
+- The conversation picker keeps only list metadata (IDs, titles, timestamps, archive state, and project labels) in the current tab's `sessionStorage` for up to 7 days. Complete lists are reused immediately and refreshed incrementally; message bodies and access tokens are never stored in this cache.
 - Imported content is stored only in the current browser's IndexedDB and is never uploaded to a server.
 
 ## Dependency Integrity
 
-`Tampermonkey.js` loads JSZip `3.10.1` from cdnjs, pinning a SHA-256 checksum onto the URL:
-
-```text
-https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js
-SHA-256: acc7e41455a80765b5fd9c7ee1b8078a6d160bbbca455aeae854de65c947d59e
-```
-
-The reader instead vendors JSZip `3.10.1` under the repository's `reader/vendor/` directory, requiring no CDN at runtime.
+`Tampermonkey.js` embeds the repository's vendored JSZip `3.10.1` source from `reader/vendor/jszip.min.js`. Both the exporter and reader therefore run without downloading executable dependencies from a third-party CDN.
 
 ## Known Limits
 
 - ChatGPT's backend APIs are private and may change without notice.
+- The offline reader limits imports to 512 MiB compressed, 2 GiB uncompressed, 512 MiB per entry, and 100,000 ZIP entries to reduce browser resource-exhaustion risk. Split larger exports into multiple archives.
 - Very large exports may run into browser memory or rate-limit constraints.
 - Whether images and attachments can be exported depends on the resource metadata present in each conversation.
 - Some team workspaces require opening a team conversation first before the script can detect the workspace.

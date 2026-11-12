@@ -1,6 +1,6 @@
 {
   "name": "chatgpt-universal-exporter",
-  "version": "1.0.0",
+  "version": "1.3.8",
   "description": "Browser-based ChatGPT conversation exporter with Markdown output and an offline ZIP reader.",
   "license": "MIT",
   "author": "huhu",
@@ -8,7 +8,7 @@
   "private": false,
   "scripts": {
     "check": "node --check Tampermonkey.js",
-    "test": "node test/filename.test.js && node test/reader.test.js",
+    "test": "node test/filename.test.js && node test/reader.test.js && node test/security.test.js",
     "verify": "npm run check && npm test"
   },
   "keywords": [
