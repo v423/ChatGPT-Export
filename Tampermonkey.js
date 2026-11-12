@@ -887,13 +887,16 @@
             }
         };
 
-        const traverse = (nodeId) => {
-            if (!nodeId || visited.has(nodeId)) return;
-            visited.add(nodeId);
-            const node = mapping[nodeId];
-            if (!node) return;
+        const traverse = (startNodeId) => {
+            const stack = [startNodeId];
+            while (stack.length) {
+                const nodeId = stack.pop();
+                if (!nodeId || visited.has(nodeId)) continue;
+                visited.add(nodeId);
+                const node = mapping[nodeId];
+                if (!node) continue;
 
-            const msg = node.message;
+                const msg = node.message;
             if (msg) {
                 const author = msg.author?.role;
                 const isHidden = msg.metadata?.is_visually_hidden_from_conversation ||
@@ -952,16 +955,18 @@
                 }
             }
 
-            if (Array.isArray(node.children)) {
-                node.children.forEach(childId => traverse(childId));
+                if (Array.isArray(node.children)) {
+                    for (let index = node.children.length - 1; index >= 0; index -= 1) {
+                        stack.push(node.children[index]);
+                    }
+                }
             }
         };
 
-        if (rootId) {
-            traverse(rootId);
-        } else {
-            mappingKeys.forEach(traverse);
-        }
+        if (rootId) traverse(rootId);
+        mappingKeys.forEach(nodeId => {
+            if (!visited.has(nodeId)) traverse(nodeId);
+        });
 
         return messages;
     }
@@ -1040,7 +1045,8 @@
 
         const mdLines = [];
         messages.forEach((msg, msgIdx) => {
-            const roleLabel = msg.role === 'user' ? '# User' : '# Assistant';
+            const roleName = String(msg.role || 'unknown').replace(/[^A-Za-z0-9 _-]/g, '').trim() || 'unknown';
+            const roleLabel = msg.role === 'user' ? '# User' : msg.role === 'assistant' ? '# Assistant' : '# ' + roleName;
             mdLines.push(roleLabel);
 
             let body = msg.content || '';
@@ -1676,6 +1682,13 @@
     }
 
     function addProjectPreviews(map, cache, projects) {
+        const activeProjectIds = new Set(projects.map(project => String(project.id)));
+        for (const [id, entry] of map) {
+            if (entry.projectId && !activeProjectIds.has(String(entry.projectId))) {
+                map.delete(id);
+            }
+        }
+        cache.projects.clear();
         projects.forEach(project => {
             cache.projects.set(String(project.id), project.title);
             (project.conversations || []).forEach(item => upsertConversationEntry(map, item, {
@@ -1685,7 +1698,9 @@
         });
     }
 
-    async function fetchProjectConversationPages(map, projects, headers, allowPreviewFallback = false) {
+    async function fetchProjectConversationPages(map, projects, headers, options = {}) {
+        const allowPreviewFallback = Boolean(options.allowPreviewFallback);
+        const firstPageOnly = Boolean(options.firstPageOnly);
         let complete = true;
         await mapWithConcurrency(projects, PROJECT_LIST_CONCURRENCY, async project => {
             const preview = Array.isArray(project.conversations) ? project.conversations : [];
@@ -1705,7 +1720,7 @@
                         projectId: project.id,
                         projectTitle: project.title
                     }));
-                    cursor = data.cursor || null;
+                    cursor = firstPageOnly ? null : (data.cursor || null);
                     fetched = true;
                 } while (cursor);
             } catch (err) {
@@ -1760,7 +1775,7 @@
                         conversationsPerGizmo: PROJECT_SIDEBAR_PREVIEW
                     });
                     addProjectPreviews(map, cache, projects);
-                    cache.projectComplete = await fetchProjectConversationPages(map, projects, headers, true);
+                    cache.projectComplete = await fetchProjectConversationPages(map, projects, headers, { allowPreviewFallback: true, firstPageOnly: true });
                     cache.projectUpdatedAt = Date.now();
                 } else if (!workspaceId) {
                     cache.projectComplete = true;
@@ -1791,7 +1806,7 @@
                         conversationsPerGizmo: PROJECT_SIDEBAR_PREVIEW
                     });
                     addProjectPreviews(map, cache, projects);
-                    const projectsComplete = await fetchProjectConversationPages(map, projects, headers, true);
+                    const projectsComplete = await fetchProjectConversationPages(map, projects, headers, { allowPreviewFallback: true });
                     cache.projectComplete = projectsComplete;
                     cache.projectUpdatedAt = Date.now();
                     if (!projectsComplete) projectWarning = t('status.projectPartial');
@@ -1871,7 +1886,7 @@
                 });
                 const map = cloneConversationEntryMap(cachedProjects);
                 addProjectPreviews(map, cache, projects);
-                const projectsComplete = await fetchProjectConversationPages(map, projects, headers, true);
+                const projectsComplete = await fetchProjectConversationPages(map, projects, headers, { allowPreviewFallback: true, firstPageOnly: true });
                 const combined = cloneConversationEntryMap(cache.entries, entry => !entry.projectId);
                 map.forEach((entry, id) => combined.set(id, entry));
                 cache.entries = combined;
@@ -1893,7 +1908,7 @@
             });
             const map = new Map();
             addProjectPreviews(map, cache, projects);
-            const projectsComplete = await fetchProjectConversationPages(map, projects, headers, true);
+            const projectsComplete = await fetchProjectConversationPages(map, projects, headers, { allowPreviewFallback: true });
             const combined = cloneConversationEntryMap(cache.entries, entry => !entry.projectId);
             map.forEach((entry, id) => combined.set(id, entry));
             cache.entries = combined;
