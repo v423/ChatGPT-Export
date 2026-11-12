@@ -1594,14 +1594,18 @@
         const projectMatch = path.match(/^\/backend-api\/gizmos\/([^/]+)\/conversations$/);
         if (!isRootList && !isProjectSidebar && !projectMatch) return;
 
-        const resolvedWorkspaceId = workspaceId || (projectMatch || isProjectSidebar ? resolveWorkspaceId(null) : null);
+        let resolvedWorkspaceId = workspaceId || null;
+        if (!resolvedWorkspaceId && (projectMatch || isProjectSidebar)) {
+            const accountMatch = document.cookie.match(/(?:^|; )_account=([^;]+)/);
+            resolvedWorkspaceId = accountMatch?.[1] || null;
+            if (!resolvedWorkspaceId) return;
+        }
         const cache = loadConversationListCache(resolvedWorkspaceId);
         const items = Array.isArray(payload.items) ? payload.items : [];
 
         if (isRootList) {
             const archived = url.searchParams.get('is_archived') === 'true';
             items.forEach(item => upsertConversationEntry(cache.entries, item, { is_archived: archived }));
-            cache.rootUpdatedAt = Date.now();
         } else if (isProjectSidebar) {
             items.forEach(rawProject => {
                 const project = normalizeProjectSpaceItem(rawProject);
@@ -1612,7 +1616,6 @@
                     projectTitle: project.title
                 }));
             });
-            cache.projectUpdatedAt = Date.now();
         } else if (projectMatch) {
             let projectId = projectMatch[1];
             try { projectId = decodeURIComponent(projectId); } catch (_) {}
@@ -1621,9 +1624,10 @@
                 projectId,
                 projectTitle
             }));
-            cache.projectUpdatedAt = Date.now();
         }
-        persistConversationListCache(resolvedWorkspaceId, cache);
+        // Keep intercepted pages in memory; persist once a complete scan has been assembled.
+        cache.updatedAt = Date.now();
+        conversationListCaches.set(getConversationCacheKey(resolvedWorkspaceId), cache);
     }
 
     async function mapWithConcurrency(items, concurrency, worker) {
