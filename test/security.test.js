@@ -24,7 +24,7 @@ assert.doesNotMatch(tm, /function tryCaptureToken/, 'the fetch observer must not
 assert.doesNotMatch(tm, /credentials\s*:\s*['"]include['"]/, 'asset requests must not send credentials to arbitrary origins');
 assert.doesNotMatch(tm, /sendBeacon|GM_xmlhttpRequest|WebSocket|EventSource/, 'the exporter must not add background upload or socket channels');
 
-const captureStart = tm.indexOf('(function captureWorkspaceIdsOnly()');
+const captureStart = tm.indexOf('(function captureWorkspaceIdsAndLocalLists()');
 const captureEnd = tm.indexOf('async function ensureAccessToken()', captureStart);
 assert.ok(captureStart >= 0 && captureEnd > captureStart, 'workspace observer should exist');
 const captureBlock = tm.slice(captureStart, captureEnd);
