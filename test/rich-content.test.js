@@ -77,12 +77,9 @@ assert.doesNotMatch(unsafe, /<script/i);
 const fenced = renderRichContent(fence + 'html\n<row>not a component</row>\n' + fence);
 assert.match(fenced, /&lt;row&gt;/);
 
-console.log('Rich content tests passed.');
-
-
 const styledText = renderRichContent('<text color="secondary" size="sm" weight="semibold" textAlign="center">Muted label</text>');
-assert.match(styledText, /color:var\\(--muted\\)/);
-assert.match(styledText, /font-size:0\\.875rem/);
+assert.match(styledText, /color:var\(--muted\)/);
+assert.match(styledText, /font-size:0\.875rem/);
 assert.match(styledText, /font-weight:600/);
 assert.match(styledText, /text-align:center/);
 const styledBox = renderRichContent('<box direction="row" align="center" justify="between" padding={3} background="surface" radius="12px"><text>Left</text><text>Right</text></box>');
@@ -90,10 +87,12 @@ assert.match(styledBox, /flex-direction:row/);
 assert.match(styledBox, /align-items:center/);
 assert.match(styledBox, /justify-content:space-between/);
 assert.match(styledBox, /padding:12px/);
-assert.match(styledBox, /background-color:var\\(--panel-soft\\)/);
+assert.match(styledBox, /background-color:var\(--panel-soft\)/);
 assert.match(styledBox, /border-radius:12px/);
 const grid = renderRichContent('<grid columns={3} rowGap={2} columnGap={4}><grid-item span={2}>A</grid-item><grid-item>B</grid-item></grid>');
-assert.match(grid, /grid-template-columns:repeat\\(3,minmax\\(0,1fr\\)\\)/);
+assert.match(grid, /grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/);
 assert.match(grid, /row-gap:8px/);
 assert.match(grid, /column-gap:16px/);
 assert.match(grid, /grid-column:span 2/);
+
+console.log('Rich content tests passed.');
