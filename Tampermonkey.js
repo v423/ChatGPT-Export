@@ -1185,11 +1185,21 @@
             const zipFilenameRegistry = makeZipScopeRegistry();
             const selected = Array.isArray(conversationEntries) && conversationEntries.length > 0;
             const entries = selected ? conversationEntries : await listConversations(workspaceId);
+            const listCache = selected ? null : loadConversationListCache(workspaceId);
+            const listCompleteness = selected
+                ? { scope: 'user_selection', complete: null }
+                : {
+                    scope: 'full_list',
+                    complete: isConversationListCacheComplete(listCache, workspaceId),
+                    root_complete: Boolean(listCache.rootComplete),
+                    project_complete: Boolean(listCache.projectComplete)
+                };
             const failedConversations = [];
             const assetManifest = [];
             const assetFailures = [];
             const exportedConversations = [];
             const integrityWarnings = [];
+            const checksumWarnings = [];
 
             for (let i = 0; i < entries.length; i++) {
                 const entry = entries[i];
@@ -1215,6 +1225,12 @@
                         }
                     );
                     exportedConversations.push(record);
+                    Object.entries(record.checksums || {}).forEach(([kind, checksum]) => {
+                        if (!checksum) checksumWarnings.push({ conversation_id: record.conversation_id, file: kind });
+                    });
+                    assetManifest.filter(asset => asset.conversation_id === record.conversation_id).forEach(asset => {
+                        if (!asset.sha256) checksumWarnings.push({ conversation_id: record.conversation_id, file: asset.path });
+                    });
                     if (archiveResult.integrity.status !== 'complete') {
                         integrityWarnings.push({
                             conversation_id: record.conversation_id,
@@ -1253,7 +1269,8 @@
                     scope: {
                         mode,
                         workspace_id: workspaceId || null,
-                        export_type: selectionType
+                        export_type: selectionType,
+                        conversation_list: listCompleteness
                     }
                 },
                 summary: {
@@ -1262,7 +1279,9 @@
                     failed_conversations: failedConversations.length,
                     exported_assets: assetManifest.length,
                     failed_assets: assetFailures.length,
-                    incomplete_conversations: integrityWarnings.length
+                    incomplete_conversations: integrityWarnings.length,
+                    incomplete_list: !selected && !listCompleteness.complete,
+                    missing_checksums: checksumWarnings.length
                 },
                 conversations: exportedConversations,
                 assets: assetManifest
@@ -1273,7 +1292,9 @@
                 summary: manifest.summary,
                 failed_conversations: failedConversations,
                 failed_assets: assetFailures,
-                incomplete_conversations: integrityWarnings
+                incomplete_conversations: integrityWarnings,
+                conversation_list: listCompleteness,
+                missing_checksums: checksumWarnings
             };
             zip.file('manifest.json', JSON.stringify(manifest, null, 2));
             zip.file('diagnostics.json', JSON.stringify(diagnostics, null, 2));
@@ -1300,7 +1321,9 @@
             const issueMessages = [
                 ...failedConversations.map(item => '• ' + item.title + ': ' + item.message),
                 ...assetFailures.map(item => '• ' + item.kind + ' ' + (item.asset_id || item.filename || '') + ': ' + item.message),
-                ...integrityWarnings.map(item => '• ' + item.title + ': mapping integrity is incomplete')
+                ...integrityWarnings.map(item => '• ' + item.title + ': mapping integrity is incomplete'),
+                ...checksumWarnings.map(item => '• ' + item.conversation_id + ': checksum unavailable for ' + item.file),
+                ...(!selected && !listCompleteness.complete ? ['• Conversation list is incomplete; this archive may not include every conversation'] : [])
             ];
             if (issueMessages.length > 0) {
                 alert('⚠️ ' + t('alert.exportCompletedWithFailures', {
@@ -2052,13 +2075,17 @@
     }
 
     async function sha256Hex(value) {
-        const subtle = window.crypto && window.crypto.subtle;
-        if (!subtle) return null;
-        let bytes = value;
-        if (typeof value === 'string') bytes = new TextEncoder().encode(value);
-        else if (value && typeof value.arrayBuffer === 'function') bytes = await value.arrayBuffer();
-        const digest = await subtle.digest('SHA-256', bytes);
-        return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+        try {
+            const subtle = window.crypto && window.crypto.subtle;
+            if (!subtle) return null;
+            let bytes = value;
+            if (typeof value === 'string') bytes = new TextEncoder().encode(value);
+            else if (value && typeof value.arrayBuffer === 'function') bytes = await value.arrayBuffer();
+            const digest = await subtle.digest('SHA-256', bytes);
+            return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+        } catch (_) {
+            return null;
+        }
     }
 
     function archivePath(zip, relativePath) {
