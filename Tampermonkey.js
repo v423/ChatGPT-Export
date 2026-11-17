@@ -139,7 +139,7 @@
             'picker.projectTag': 'Project: {title}',
             'picker.archivedTag': 'Archived',
             'alert.accessTokenUnavailable': 'Could not get Access Token. Refresh the page or open any conversation and try again.',
-            'alert.exportCompletedWithFailures': 'Export complete, but {count} conversations failed and were skipped:\n\n{list}',
+            'alert.exportCompletedWithFailures': 'Export complete, but {count} items need attention:\n\n{list}',
             'alert.exportSuccess': 'Export complete.',
             'alert.exportFailed': 'Export failed: {message}. See the console for details (F12 -> Console).',
             'alert.noProjectConversations': 'No project-space conversations found.',
@@ -229,7 +229,7 @@
             'picker.projectTag': '项目: {title}',
             'picker.archivedTag': '已归档',
             'alert.accessTokenUnavailable': '无法获取 Access Token。请刷新页面或打开任意一个对话后再试。',
-            'alert.exportCompletedWithFailures': '导出完成，但有 {count} 个对话失败（已跳过）：\n\n{list}',
+            'alert.exportCompletedWithFailures': '导出完成，但有 {count} 项需要注意：\n\n{list}',
             'alert.exportSuccess': '导出完成！',
             'alert.exportFailed': '导出失败: {message}。详情请查看控制台（F12 -> Console）。',
             'alert.noProjectConversations': '未找到项目空间对话。',
@@ -1183,82 +1183,162 @@
         try {
             const zip = new JSZip();
             const zipFilenameRegistry = makeZipScopeRegistry();
+            const selected = Array.isArray(conversationEntries) && conversationEntries.length > 0;
+            const entries = selected ? conversationEntries : await listConversations(workspaceId);
+            const listCache = selected ? null : loadConversationListCache(workspaceId);
+            const listCompleteness = selected
+                ? { scope: 'user_selection', complete: null }
+                : {
+                    scope: 'full_list',
+                    complete: isConversationListCacheComplete(listCache, workspaceId),
+                    root_complete: Boolean(listCache.rootComplete),
+                    project_complete: Boolean(listCache.projectComplete)
+                };
             const failedConversations = [];
-            if (Array.isArray(conversationEntries) && conversationEntries.length > 0) {
-                for (let i = 0; i < conversationEntries.length; i++) {
-                    const entry = conversationEntries[i];
-                    const label = entry?.title ? entry.title.slice(0, 12) : t('fallback.conversation');
-                    btn.textContent = `📥 ${label} (${i + 1}/${conversationEntries.length})`;
-                    try {
-                        const convData = await getConversation(entry.id, workspaceId);
-                        const target = entry?.projectTitle
-                            ? zip.folder(sanitizeFilename(entry.projectTitle))
-                            : zip;
-                        await exportConversationIntoZip(convData, target, accessToken, zipFilenameRegistry);
-                    } catch (convErr) {
-                        console.error(`⚠️ 跳过对话 [${entry.title || entry.id}]: ${convErr.message}`);
-                        failedConversations.push({ id: entry.id, title: entry.title || t('fallback.unknown'), error: convErr.message });
-                    }
-                    await sleep(jitter());
-                }
-            } else {
-                btn.textContent = '📂 ' + t('status.fetchingOrphanConversations');
-                const entries = await listConversations(workspaceId);
-                for (let i = 0; i < entries.length; i++) {
-                    const entry = entries[i];
-                    const label = entry.title ? entry.title.slice(0, 12) : t('fallback.conversation');
-                    btn.textContent = '📥 ' + label + ' (' + (i + 1) + '/' + entries.length + ')';
-                    try {
-                        const convData = await getConversation(entry.id, workspaceId);
-                        const target = entry.projectTitle
-                            ? zip.folder(sanitizeFilename(entry.projectTitle))
-                            : zip;
-                        await exportConversationIntoZip(convData, target, accessToken, zipFilenameRegistry);
-                    } catch (convErr) {
-                        console.error('⚠️ 跳过对话 [' + (entry.title || entry.id) + ']: ' + convErr.message);
-                        failedConversations.push({
-                            id: entry.id,
-                            title: entry.title || t('fallback.unknown'),
-                            error: convErr.message
+            const assetManifest = [];
+            const assetFailures = [];
+            const exportedConversations = [];
+            const integrityWarnings = [];
+            const checksumWarnings = [];
+
+            for (let i = 0; i < entries.length; i++) {
+                const entry = entries[i];
+                const label = entry?.title ? entry.title.slice(0, 12) : t('fallback.conversation');
+                btn.textContent = '📥 ' + label + ' (' + (i + 1) + '/' + entries.length + ')';
+                try {
+                    const archiveResult = await getConversationForArchive(entry.id, workspaceId);
+                    const target = entry?.projectTitle
+                        ? zip.folder(sanitizeFilename(entry.projectTitle))
+                        : zip;
+                    const record = await exportConversationIntoZip(
+                        archiveResult.data,
+                        target,
+                        accessToken,
+                        zipFilenameRegistry,
+                        {
+                            fetchedAt: new Date().toISOString(),
+                            projectTitle: entry?.projectTitle || null,
+                            integrity: archiveResult.integrity,
+                            scrollFallback: archiveResult.scrollFallback,
+                            assetManifest,
+                            assetFailures
+                        }
+                    );
+                    exportedConversations.push(record);
+                    Object.entries(record.checksums || {}).forEach(([kind, checksum]) => {
+                        if (!checksum) checksumWarnings.push({ conversation_id: record.conversation_id, file: kind });
+                    });
+                    assetManifest.filter(asset => asset.conversation_id === record.conversation_id).forEach(asset => {
+                        if (!asset.sha256) checksumWarnings.push({ conversation_id: record.conversation_id, file: asset.path });
+                    });
+                    if (archiveResult.integrity.status !== 'complete') {
+                        integrityWarnings.push({
+                            conversation_id: record.conversation_id,
+                            title: record.title,
+                            integrity: archiveResult.integrity,
+                            scroll_fallback: archiveResult.scrollFallback
                         });
                     }
-                    await sleep(jitter());
+                } catch (convErr) {
+                    const failure = {
+                        id: String(entry?.id || ''),
+                        title: String(entry?.title || t('fallback.unknown')),
+                        message: safeDiagnosticMessage(convErr)
+                    };
+                    failedConversations.push(failure);
+                    console.error('⚠️ 跳过对话 [' + failure.title + ']: ' + failure.message);
                 }
-
+                await sleep(jitter());
             }
 
-            btn.textContent = `📦 ${t('status.generatingZip')}`;
-            const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
-            const date = new Date().toISOString().slice(0, 10);
-            const selectionType = exportType || ((Array.isArray(conversationEntries) && conversationEntries.length > 0) ? 'selected' : 'full');
+            const generatedAt = new Date().toISOString();
+            const selectionType = exportType || (selected ? 'selected' : 'full');
+            const exporterVersion = typeof GM_info !== 'undefined' && GM_info.script
+                ? (GM_info.script.version || null)
+                : null;
+            const manifest = {
+                format: 'chat-archive/v1',
+                schema_version: 1,
+                generated_at: generatedAt,
+                exporter: {
+                    name: 'ChatGPT Universal Exporter',
+                    version: exporterVersion
+                },
+                source: {
+                    provider: 'ChatGPT',
+                    scope: {
+                        mode,
+                        workspace_id: workspaceId || null,
+                        export_type: selectionType,
+                        conversation_list: listCompleteness
+                    }
+                },
+                summary: {
+                    requested_conversations: entries.length,
+                    exported_conversations: exportedConversations.length,
+                    failed_conversations: failedConversations.length,
+                    exported_assets: assetManifest.length,
+                    failed_assets: assetFailures.length,
+                    incomplete_conversations: integrityWarnings.length,
+                    incomplete_list: !selected && !listCompleteness.complete,
+                    missing_checksums: checksumWarnings.length
+                },
+                conversations: exportedConversations,
+                assets: assetManifest
+            };
+            const diagnostics = {
+                format: 'chat-archive-diagnostics/v1',
+                generated_at: generatedAt,
+                summary: manifest.summary,
+                failed_conversations: failedConversations,
+                failed_assets: assetFailures,
+                incomplete_conversations: integrityWarnings,
+                conversation_list: listCompleteness,
+                missing_checksums: checksumWarnings
+            };
+            zip.file('manifest.json', JSON.stringify(manifest, null, 2));
+            zip.file('diagnostics.json', JSON.stringify(diagnostics, null, 2));
+
+            btn.textContent = '📦 ' + t('status.generatingZip');
+            const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+            const date = generatedAt.slice(0, 10);
             let filename = '';
             if (selectionType === 'selected') {
                 filename = mode === 'team'
-                    ? `chatgpt_team_selected_${workspaceId}_${date}.zip`
+                    ? 'chatgpt_team_selected_' + workspaceId + '_' + date + '.zip'
                     : mode === 'project'
-                        ? `chatgpt_project_selected_${date}.zip`
-                        : `chatgpt_personal_selected_${date}.zip`;
+                        ? 'chatgpt_project_selected_' + date + '.zip'
+                        : 'chatgpt_personal_selected_' + date + '.zip';
             } else {
                 filename = mode === 'team'
-                    ? `chatgpt_team_backup_${workspaceId}_${date}.zip`
+                    ? 'chatgpt_team_backup_' + workspaceId + '_' + date + '.zip'
                     : mode === 'project'
-                        ? `chatgpt_project_backup_${date}.zip`
-                        : `chatgpt_personal_backup_${date}.zip`;
+                        ? 'chatgpt_project_backup_' + date + '.zip'
+                        : 'chatgpt_personal_backup_' + date + '.zip';
             }
             downloadFile(blob, filename);
-            if (failedConversations.length > 0) {
-                const failList = failedConversations.map(f => `• ${f.title}: ${f.error}`).join('\n');
-                alert(`⚠️ ${t('alert.exportCompletedWithFailures', { count: failedConversations.length, list: failList })}`);
-                console.warn('导出中跳过的对话:', failedConversations);
-            } else {
-                alert(`✅ ${t('alert.exportSuccess')}`);
-            }
-            btn.textContent = `✅ ${t('button.done')}`;
 
-        } catch (e) {
-            console.error("导出过程中发生严重错误:", e);
-            alert(t('alert.exportFailed', { message: e.message }));
-            btn.textContent = `⚠️ ${t('button.error')}`;
+            const issueMessages = [
+                ...failedConversations.map(item => '• ' + item.title + ': ' + item.message),
+                ...assetFailures.map(item => '• ' + item.kind + ' ' + (item.asset_id || item.filename || '') + ': ' + item.message),
+                ...integrityWarnings.map(item => '• ' + item.title + ': mapping integrity is incomplete'),
+                ...checksumWarnings.map(item => '• ' + item.conversation_id + ': checksum unavailable for ' + item.file),
+                ...(!selected && !listCompleteness.complete ? ['• Conversation list is incomplete; this archive may not include every conversation'] : [])
+            ];
+            if (issueMessages.length > 0) {
+                alert('⚠️ ' + t('alert.exportCompletedWithFailures', {
+                    count: issueMessages.length,
+                    list: issueMessages.join('\n')
+                }));
+                console.warn('导出诊断:', diagnostics);
+            } else {
+                alert('✅ ' + t('alert.exportSuccess'));
+            }
+            btn.textContent = '✅ ' + t('button.done');
+        } catch (error) {
+            console.error('导出过程中发生严重错误:', error);
+            alert(t('alert.exportFailed', { message: safeDiagnosticMessage(error) }));
+            btn.textContent = '⚠️ ' + t('button.error');
         } finally {
             setTimeout(() => {
                 btn.disabled = false;
@@ -1266,6 +1346,7 @@
             }, 3000);
         }
     }
+
 
     async function startExportProcess(mode, workspaceId) {
         await exportConversations({ mode, workspaceId });
@@ -1960,9 +2041,7 @@
             try {
                 const r = await fetch(`/backend-api/conversation/${id}`, { headers });
                 if (r.ok) {
-                    const j = await r.json();
-                    j.__fetched_at = new Date().toISOString();
-                    return j;
+                    return await r.json();
                 }
                 lastError = new Error(t('error.conversationDetailFailed', { id, status: r.status }));
                 // 仅对 5xx 服务端错误重试
@@ -1985,6 +2064,234 @@
             }
         }
         throw lastError;
+    }
+
+    function safeDiagnosticMessage(error) {
+        return String(error && error.message ? error.message : error || 'Unknown error')
+            .replace(/https?:\/\/[^\s)]+/gi, '[URL]')
+            .replace(/\bBearer\s+[A-Za-z0-9._~-]+/gi, 'Bearer [redacted]')
+            .replace(/\b(access_token|token|authorization)\s*[:=]\s*[^,\s&]+/gi, '$1=[redacted]')
+            .slice(0, 400);
+    }
+
+    async function sha256Hex(value) {
+        try {
+            const subtle = window.crypto && window.crypto.subtle;
+            if (!subtle) return null;
+            let bytes = value;
+            if (typeof value === 'string') bytes = new TextEncoder().encode(value);
+            else if (value && typeof value.arrayBuffer === 'function') bytes = await value.arrayBuffer();
+            const digest = await subtle.digest('SHA-256', bytes);
+            return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+        } catch (_) {
+            return null;
+        }
+    }
+
+    function archivePath(zip, relativePath) {
+        return (String(zip && zip.root || '') + String(relativePath || ''))
+            .replace(/\\/g, '/')
+            .replace(/^\/+/, '');
+    }
+
+    function inspectConversationCompleteness(convData) {
+        const mapping = convData && convData.mapping;
+        if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping)) {
+            return {
+                status: 'incomplete',
+                reason: 'missing_mapping',
+                mapping_node_count: 0,
+                missing_parent_ids: [],
+                missing_child_ids: [],
+                current_path: [],
+                current_path_verified: false
+            };
+        }
+
+        const ids = Object.keys(mapping);
+        const idSet = new Set(ids);
+        const missingParents = [];
+        const missingChildren = [];
+        for (const nodeId of ids) {
+            const node = mapping[nodeId];
+            if (!node || typeof node !== 'object') continue;
+            if (node.parent && !idSet.has(String(node.parent)) && missingParents.length < 100) {
+                missingParents.push({ node_id: nodeId, missing_parent_id: String(node.parent) });
+            }
+            if (Array.isArray(node.children)) {
+                for (const childId of node.children) {
+                    if (childId && !idSet.has(String(childId)) && missingChildren.length < 100) {
+                        missingChildren.push({ node_id: nodeId, missing_child_id: String(childId) });
+                    }
+                }
+            }
+        }
+
+        const currentNode = convData.current_node ? String(convData.current_node) : '';
+        const currentPath = [];
+        const visited = new Set();
+        let currentNodeMissing = false;
+        let currentPathCycle = false;
+        let cursor = currentNode;
+        while (cursor) {
+            if (visited.has(cursor)) {
+                currentPathCycle = true;
+                break;
+            }
+            visited.add(cursor);
+            const node = mapping[cursor];
+            if (!node) {
+                currentNodeMissing = true;
+                break;
+            }
+            currentPath.push(cursor);
+            cursor = node.parent ? String(node.parent) : '';
+        }
+
+        const complete = ids.length > 0 &&
+            missingParents.length === 0 &&
+            missingChildren.length === 0 &&
+            !currentNodeMissing &&
+            !currentPathCycle;
+        return {
+            status: complete ? 'complete' : 'incomplete',
+            reason: complete ? null : 'mapping_references_missing_or_invalid',
+            mapping_node_count: ids.length,
+            current_node: currentNode || null,
+            current_path: currentPath,
+            current_path_verified: Boolean(currentNode) && !currentNodeMissing && !currentPathCycle,
+            current_node_missing: currentNodeMissing,
+            current_path_cycle: currentPathCycle,
+            missing_parent_ids: missingParents,
+            missing_child_ids: missingChildren
+        };
+    }
+
+    function buildNormalizedConversation(convData, integrity = null) {
+        const mapping = convData && convData.mapping && typeof convData.mapping === 'object'
+            ? convData.mapping
+            : {};
+        const currentPath = new Set(integrity && Array.isArray(integrity.current_path)
+            ? integrity.current_path
+            : []);
+        const sourceMetadata = {};
+        Object.keys(convData || {}).forEach(key => {
+            if (key !== 'mapping') sourceMetadata[key] = convData[key];
+        });
+        const nodes = Object.entries(mapping).map(([nodeId, sourceNode]) => {
+            const node = sourceNode && typeof sourceNode === 'object'
+                ? sourceNode
+                : { source_value: sourceNode };
+            return {
+                ...node,
+                node_id: nodeId,
+                parent_id: node.parent == null ? null : String(node.parent),
+                child_ids: Array.isArray(node.children) ? node.children.slice() : [],
+                is_current_path: currentPath.has(nodeId)
+            };
+        });
+        return {
+            format: 'chat-archive/v1',
+            schema_version: 1,
+            conversation: {
+                id: convData && (convData.conversation_id || convData.id) || null,
+                title: convData && convData.title || null,
+                create_time: convData && convData.create_time != null ? convData.create_time : null,
+                update_time: convData && convData.update_time != null ? convData.update_time : null,
+                current_node: convData && convData.current_node || null,
+                current_path: Array.from(currentPath)
+            },
+            source_metadata: sourceMetadata,
+            nodes,
+            integrity: integrity || inspectConversationCompleteness(convData)
+        };
+    }
+
+    function getCurrentConversationId() {
+        const pathname = typeof location !== 'undefined' && location.pathname
+            ? String(location.pathname)
+            : '';
+        const match = pathname.match(/\/c\/([^/?#]+)/);
+        if (!match) return '';
+        try { return decodeURIComponent(match[1]); } catch (_) { return match[1]; }
+    }
+
+    async function autoScrollCurrentConversation(conversationId) {
+        if (getCurrentConversationId() !== String(conversationId)) {
+            return { attempted: false, reason: 'conversation_not_open' };
+        }
+        const selector = '[data-testid^="conversation-turn"]';
+        const firstTurn = document.querySelector(selector);
+        if (!firstTurn) return { attempted: false, reason: 'conversation_dom_not_found' };
+
+        let scroller = firstTurn.parentElement;
+        while (scroller && scroller !== document.body) {
+            const style = typeof window.getComputedStyle === 'function'
+                ? window.getComputedStyle(scroller)
+                : null;
+            if (style && /(auto|scroll)/.test(style.overflowY || '') &&
+                scroller.scrollHeight > scroller.clientHeight + 20) break;
+            scroller = scroller.parentElement;
+        }
+        if (!scroller || scroller === document.body) {
+            scroller = document.scrollingElement || document.documentElement;
+        }
+
+        const countTurns = () => document.querySelectorAll(selector).length;
+        let previousCount = countTurns();
+        let previousHeight = Number(scroller.scrollHeight) || 0;
+        let stableIterations = 0;
+        let iterations = 0;
+        for (; iterations < 60 && stableIterations < 3; iterations += 1) {
+            scroller.scrollTop = 0;
+            if (typeof scroller.scrollTo === 'function') scroller.scrollTo(0, 0);
+            if (typeof scroller.dispatchEvent === 'function' && typeof Event !== 'undefined') {
+                scroller.dispatchEvent(new Event('scroll', { bubbles: true }));
+            }
+            if (typeof window.scrollTo === 'function') window.scrollTo(0, 0);
+            await sleep(350);
+
+            const nextCount = countTurns();
+            const nextHeight = Number(scroller.scrollHeight) || 0;
+            if (nextCount > previousCount || nextHeight > previousHeight + 8) {
+                stableIterations = 0;
+            } else {
+                stableIterations += 1;
+            }
+            previousCount = nextCount;
+            previousHeight = nextHeight;
+        }
+        return {
+            attempted: true,
+            reason: stableIterations >= 3 ? 'reached_stable_top' : 'iteration_limit',
+            iterations,
+            loaded_turns: countTurns()
+        };
+    }
+
+    async function getConversationForArchive(id, workspaceId) {
+        let data = await getConversation(id, workspaceId);
+        let integrity = inspectConversationCompleteness(data);
+        let scrollFallback = { attempted: false, reason: 'not_needed' };
+        if (integrity.status !== 'complete') {
+            scrollFallback = await autoScrollCurrentConversation(id);
+            if (scrollFallback.attempted) {
+                try {
+                    const refreshed = await getConversation(id, workspaceId);
+                    const refreshedIntegrity = inspectConversationCompleteness(refreshed);
+                    scrollFallback.mapping_node_count_before = integrity.mapping_node_count;
+                    scrollFallback.mapping_node_count_after = refreshedIntegrity.mapping_node_count;
+                    if (refreshedIntegrity.status === 'complete' ||
+                        refreshedIntegrity.mapping_node_count >= integrity.mapping_node_count) {
+                        data = refreshed;
+                        integrity = refreshedIntegrity;
+                    }
+                } catch (error) {
+                    scrollFallback.refetch_error = safeDiagnosticMessage(error);
+                }
+            }
+        }
+        return { data, integrity, scrollFallback };
     }
 
     // --- 图片导出辅助函数 ---
@@ -2112,7 +2419,7 @@
         if (!r.ok) throw new Error(t('error.fileDownloadFailed', { status: r.status }));
         return await r.blob();
     }
-    async function downloadConversationAssets(convData, targetZip, generateMarkdown, accessToken, zipFilenameRegistry) {
+    async function downloadConversationAssets(convData, targetZip, generateMarkdown, accessToken, zipFilenameRegistry, assetManifest = [], assetFailures = []) {
         const messages = extractConversationMessages(convData);
         const seen = new Set();
         const pending = [];
@@ -2161,12 +2468,27 @@
                         imageScope
                     );
                     ns.file(filename, blob);
+                    assetManifest.push({
+                        conversation_id: String(convData.conversation_id || convData.id || ''),
+                        kind: 'image',
+                        path: archivePath(targetZip, 'images/' + filename),
+                        filename,
+                        size: Number(blob.size) || 0,
+                        mime_type: blob.type || image.content_type || null,
+                        sha256: await sha256Hex(blob)
+                    });
                     imageFiles.set(image.asset_pointer, {
                         filename,
                         dispositionLabel: image.dispositionLabel || 'image'
                     });
                     okCount++;
                 } catch (err) {
+                    assetFailures.push({
+                        conversation_id: String(convData.conversation_id || convData.id || ''),
+                        kind: 'image',
+                        asset_id: assetId,
+                        message: safeDiagnosticMessage(err)
+                    });
                     console.warn(`⚠️ 图片下载跳过 [${assetId}]:`, err.message, image);
                 }
                 await sleep(jitter());
@@ -2190,6 +2512,16 @@
                     }
                     const filename = makeUniqueZipFilename(safeName, zipFilenameRegistry, fileScope);
                     ns.file(filename, blob);
+                    assetManifest.push({
+                        conversation_id: String(convData.conversation_id || convData.id || ''),
+                        kind: 'file',
+                        path: archivePath(targetZip, 'files/' + filename),
+                        filename,
+                        label: file.label || file.filename || filename,
+                        size: Number(blob.size) || 0,
+                        mime_type: blob.type || file.content_type || null,
+                        sha256: await sha256Hex(blob)
+                    });
                     const entry = {
                         filename,
                         label: file.label || file.filename || filename
@@ -2197,6 +2529,13 @@
                     fileReferenceKeys({ ...file, key }).forEach(alias => attachmentFiles.set(alias, entry));
                     okFileCount++;
                 } catch (err) {
+                    assetFailures.push({
+                        conversation_id: String(convData.conversation_id || convData.id || ''),
+                        kind: 'file',
+                        asset_id: assetId,
+                        filename: file.filename || file.label || null,
+                        message: safeDiagnosticMessage(err)
+                    });
                     console.warn(`⚠️ 文件下载跳过 [${assetId}]:`, err.message, file);
                 }
                 await sleep(jitter());
@@ -2208,21 +2547,67 @@
     }
 
     /**
-     * 将单个对话导出到 ZIP（同时写入 JSON 原始数据、Markdown（含图片引用）、以及图片文件）。
-     * @returns {Promise<void>}
+     * 写入完整原始 JSON、可编辑的 chat-archive/v1 JSON、Markdown 与独立资源。
+     * 原始 API 对象不会被注入导出时间或其他派生字段。
      */
-    async function exportConversationIntoZip(convData, zip, accessToken, zipFilenameRegistry) {
-        const scope = `${zip.root || ''}${zip.name || ''}`;
+    async function exportConversationIntoZip(convData, zip, accessToken, zipFilenameRegistry, options = {}) {
+        const scope = String(zip.root || '') + String(zip.name || '');
+        const conversationId = String(convData.conversation_id || convData.id || 'unknown');
+        const rawJson = JSON.stringify(convData, null, 2);
         const jsonFilename = makeUniqueZipFilename(generateUniqueFilename(convData), zipFilenameRegistry, scope);
-        zip.file(jsonFilename, JSON.stringify(convData, null, 2));
-        const markdown = await downloadConversationAssets(convData, zip, true, accessToken, zipFilenameRegistry);
+        zip.file(jsonFilename, rawJson);
+        const assetManifest = options.assetManifest || [];
+        const assetFailures = options.assetFailures || [];
+        const markdown = await downloadConversationAssets(
+            convData, zip, true, accessToken, zipFilenameRegistry, assetManifest, assetFailures
+        );
         const markdownFilename = makeUniqueZipFilename(
-            jsonFilename.endsWith('.json') ? `${jsonFilename.slice(0, -5)}.md` : generateMarkdownFilename(convData),
+            jsonFilename.endsWith('.json') ? jsonFilename.slice(0, -5) + '.md' : generateMarkdownFilename(convData),
             zipFilenameRegistry,
             scope
         );
         zip.file(markdownFilename, markdown);
+
+        const integrity = options.integrity || inspectConversationCompleteness(convData);
+        const normalized = buildNormalizedConversation(convData, integrity);
+        const normalizedJson = JSON.stringify(normalized, null, 2);
+        const normalizedFolder = zip.folder('normalized');
+        const normalizedFilename = makeUniqueZipFilename(
+            sanitizeImageFilenamePart(conversationId, 'conversation') + '.json',
+            zipFilenameRegistry,
+            'normalized/'
+        );
+        normalizedFolder.file(normalizedFilename, normalizedJson);
+
+        const rawPath = archivePath(zip, jsonFilename);
+        const markdownPath = archivePath(zip, markdownFilename);
+        const normalizedPath = archivePath(normalizedFolder, normalizedFilename);
+        const conversationAssets = assetManifest
+            .filter(asset => asset.conversation_id === conversationId)
+            .map(asset => asset.path);
+        return {
+            conversation_id: conversationId,
+            title: String(convData.title || 'Untitled conversation'),
+            project: options.projectTitle || null,
+            create_time: convData.create_time == null ? null : convData.create_time,
+            update_time: convData.update_time == null ? null : convData.update_time,
+            fetched_at: options.fetchedAt || new Date().toISOString(),
+            mapping_integrity: integrity,
+            scroll_fallback: options.scrollFallback || { attempted: false, reason: 'not_requested' },
+            files: {
+                raw_json: rawPath,
+                normalized_json: normalizedPath,
+                markdown: markdownPath
+            },
+            checksums: {
+                raw_json_sha256: await sha256Hex(rawJson),
+                normalized_json_sha256: await sha256Hex(normalizedJson),
+                markdown_sha256: await sha256Hex(markdown)
+            },
+            assets: conversationAssets
+        };
     }
+
 
     // --- UI 相关函数 ---
     // (UI部分无变动，此处省略以保持简洁)

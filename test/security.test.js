@@ -4,6 +4,7 @@ const path = require('node:path');
 
 const tm = fs.readFileSync(path.join(__dirname, '..', 'Tampermonkey.js'), 'utf8');
 const reader = fs.readFileSync(path.join(__dirname, '..', 'reader/assets/reader.js'), 'utf8');
+const archiveReader = fs.readFileSync(path.join(__dirname, '..', 'app/public/app.js'), 'utf8');
 const jszip = fs.readFileSync(path.join(__dirname, '..', 'reader/vendor/jszip.min.js'), 'utf8');
 
 assert.doesNotMatch(tm, /^\s*\/\/\s*@require\s+https?:\/\//m, 'userscript must not load executable code from a remote CDN');
@@ -21,8 +22,14 @@ assert.equal(markdownHelpers({ url: 'https://cdn.openai.com/image a(1).png', dis
 assert.match(tm, /function installBundledJSZip\(\)/, 'bundled JSZip should be isolated from host-page module loaders');
 assert.doesNotMatch(tm, /XMLHttpRequest\.prototype\.open|this\.getRequestHeader/, 'broken XHR header interception must be removed');
 assert.doesNotMatch(tm, /function tryCaptureToken/, 'the fetch observer must not capture bearer tokens');
+assert.doesNotMatch(tm, /j\.__fetched_at\s*=/, 'the original ChatGPT JSON must not be mutated with exporter metadata');
+assert.match(tm, /zip\.file\('manifest\.json'/, 'every export should include a versioned manifest');
+assert.match(tm, /zip\.file\('diagnostics\.json'/, 'export failures and incomplete mappings should be recorded');
+assert.match(tm, /format: 'chat-archive\/v1'/, 'normalized archive JSON should declare its schema version');
 assert.doesNotMatch(tm, /credentials\s*:\s*['"]include['"]/, 'asset requests must not send credentials to arbitrary origins');
 assert.doesNotMatch(tm, /sendBeacon|GM_xmlhttpRequest|WebSocket|EventSource/, 'the exporter must not add background upload or socket channels');
+assert.match(archiveReader, /window\.print\(\)/, 'the SQLite reader should provide a selectable-text print/PDF fallback');
+assert.match(archiveReader, /while \(state\.hasOlder\)/, 'PDF export must load every older message page before printing');
 
 const captureStart = tm.indexOf('(function captureWorkspaceIdsAndLocalLists()');
 const captureEnd = tm.indexOf('async function ensureAccessToken()', captureStart);

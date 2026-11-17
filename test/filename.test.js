@@ -27,6 +27,8 @@ const testExport = `
         isConversationListCacheComplete,
         isConversationListCacheFresh,
         mapWithConcurrency,
+        inspectConversationCompleteness,
+        buildNormalizedConversation,
     };
 `;
 script = script.replace(/\n\}\)\(\);\s*$/, `${testExport}\n})();`);
@@ -226,6 +228,43 @@ assert.equal(duplicateImageMessages[0].images.length, 1);
 assert.equal(duplicateImageMessages[0].images[0].asset_pointer, 'sediment://file_image123');
 assert.equal(duplicateImageMessages[0].images[0].url, 'https://example.test/image.png');
 assert.equal(duplicateImageMessages[0].images[0].source, 'multimodal_text,attachment');
+
+
+// Versioned archive normalization retains every source mapping node and branch.
+const archiveFixture = {
+  conversation_id: 'archive-123',
+  title: 'Archive fixture',
+  create_time: 1700000000,
+  current_node: 'assistant-main',
+  custom_source_field: { preserved: true },
+  mapping: {
+    root: { parent: null, children: ['user-main', 'user-alternative'], message: null },
+    'user-main': { parent: 'root', children: ['assistant-main'], message: { id: 'user-1', author: { role: 'user' }, content: { parts: ['hello'] } } },
+    'assistant-main': { parent: 'user-main', children: [], message: { id: 'assistant-1', author: { role: 'assistant' }, content: { parts: ['answer'] } } },
+    'user-alternative': { parent: 'root', children: [], message: { id: 'user-2', author: { role: 'user' }, content: { parts: ['alternate branch'] } } }
+  }
+};
+const archiveFixtureBefore = JSON.stringify(archiveFixture);
+const archiveIntegrity = helpers.inspectConversationCompleteness(archiveFixture);
+assert.equal(archiveIntegrity.status, 'complete');
+assert.equal(archiveIntegrity.mapping_node_count, 4);
+assert.deepEqual(Array.from(archiveIntegrity.current_path), ['assistant-main', 'user-main', 'root']);
+const normalizedArchive = helpers.buildNormalizedConversation(archiveFixture, archiveIntegrity);
+assert.equal(normalizedArchive.format, 'chat-archive/v1');
+assert.equal(normalizedArchive.schema_version, 1);
+assert.equal(normalizedArchive.nodes.length, 4);
+assert.equal(normalizedArchive.nodes.find(node => node.node_id === 'user-alternative').is_current_path, false);
+assert.equal(normalizedArchive.nodes.find(node => node.node_id === 'assistant-main').is_current_path, true);
+assert.deepEqual(normalizedArchive.source_metadata.custom_source_field, { preserved: true });
+assert.equal(JSON.stringify(archiveFixture), archiveFixtureBefore, 'normalization must not mutate the original source object');
+const incompleteArchive = {
+  current_node: 'missing-current',
+  mapping: { root: { parent: null, children: ['missing-child'] } }
+};
+const incompleteIntegrity = helpers.inspectConversationCompleteness(incompleteArchive);
+assert.equal(incompleteIntegrity.status, 'incomplete');
+assert.equal(incompleteIntegrity.current_node_missing, true);
+assert.equal(incompleteIntegrity.missing_child_ids[0].missing_child_id, 'missing-child');
 
 console.log('filename helpers ok');
 
