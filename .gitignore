@@ -24,6 +24,13 @@ pnpm-debug.log*
 coverage/
 .nyc_output/
 
+# Local application data
+/data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+
 # Local exports and archives
 *.zip
 *.tar
