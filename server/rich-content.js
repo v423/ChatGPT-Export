@@ -281,10 +281,71 @@ function safeFlex(value) {
 
 function safeColor(value) {
   const raw = String(value || '').trim();
+  const tokens = {
+    primary: 'var(--text)',
+    foreground: 'var(--text)',
+    secondary: 'var(--muted)',
+    muted: 'var(--muted)',
+    accent: 'var(--accent)',
+    info: 'var(--accent)',
+    success: '#15803d',
+    warning: '#a16207',
+    danger: '#b91c1c',
+    error: '#b91c1c',
+    background: 'var(--panel)',
+    surface: 'var(--panel-soft)',
+    border: 'var(--line)'
+  };
+  if (tokens[raw]) return tokens[raw];
   if (/^#[0-9a-f]{3,8}$/i.test(raw)) return raw;
   if (/^(?:transparent|currentColor|black|white|red|green|blue|gray|grey|orange|purple)$/i.test(raw)) return raw;
   if (/^rgba?\([0-9.,%\s]+\)$/i.test(raw)) return raw;
   return '';
+}
+
+
+function safeFontSize(value) {
+  const raw = String(value == null ? '' : value).trim().toLowerCase();
+  const tokens = {
+    xs: '0.75rem', sm: '0.875rem', md: '1rem', base: '1rem',
+    lg: '1.125rem', xl: '1.25rem', '2xl': '1.5rem',
+    '3xl': '1.875rem', '4xl': '2.25rem'
+  };
+  if (tokens[raw]) return tokens[raw];
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.max(8, Math.min(48, value)) + 'px';
+  }
+  return /^(?:[8-9]|[1-4][0-9])(?:\.[0-9]+)?(?:px|pt|rem|em|%)$/.test(raw) ? raw : '';
+}
+
+function safeFontWeight(value) {
+  const raw = String(value == null ? '' : value).trim().toLowerCase();
+  const tokens = { normal: '400', medium: '500', semibold: '600', bold: '700' };
+  if (tokens[raw]) return tokens[raw];
+  return /^(?:100|200|300|400|500|600|700|800|900)$/.test(raw) ? raw : '';
+}
+
+function safeTextAlign(value) {
+  return safeEnum(value, new Set(['left', 'center', 'right', 'justify']));
+}
+
+function safeAlign(value) {
+  const raw = String(value || '');
+  return new Set(['start', 'center', 'end', 'stretch', 'baseline']).has(raw) ? raw : '';
+}
+
+function safeJustify(value) {
+  const raw = String(value || '');
+  return new Set(['start', 'center', 'end', 'between', 'around', 'evenly']).has(raw) ? raw : '';
+}
+
+function safeBorder(value) {
+  const raw = String(value || '').trim();
+  if (raw === 'none') return 'none';
+  const match = raw.match(/^(0|[1-9][0-9]?(?:px|rem))\s+(solid|dashed|dotted)\s+(#[0-9a-f]{3,8}|[a-z]{1,20})$/i);
+  if (!match) return '';
+  const color = safeColor(match[3]);
+  return color ? match[1] + ' ' + match[2] + ' ' + color : '';
 }
 
 function safeAspectRatio(value) {
@@ -699,18 +760,29 @@ function renderElement(node, options) {
     const gap = safeSpacing(attributes.gap);
     const rowGap = safeSpacing(attributes.rowGap);
     const columnGap = safeSpacing(attributes.columnGap);
-    const align = safeEnum(attributes.align, new Set(['start', 'center', 'end', 'stretch', 'baseline']));
-    const justify = safeEnum(attributes.justify, new Set(['start', 'center', 'end', 'between', 'around']));
+    const align = safeAlign(attributes.align);
+    const justify = safeJustify(attributes.justify);
+    const width = safeLength(attributes.width);
+    const padding = safeSpacing(attributes.padding);
+    const background = safeColor(attributes.background);
+    const radius = safeLength(attributes.radius);
+    const border = safeBorder(attributes.border);
+    const direction = name === 'flow' ? 'row' : (attributes.direction === 'column' ? 'column' : 'row');
     const wrap = attributes.wrap === false ? 'nowrap' : 'wrap';
     const style = [
       'display:flex',
-      'flex-direction:row',
+      'flex-direction:' + direction,
       'flex-wrap:' + wrap,
       gap ? 'gap:' + gap : '',
       rowGap ? 'row-gap:' + rowGap : '',
       columnGap ? 'column-gap:' + columnGap : '',
+      width ? 'width:' + width : '',
+      padding ? 'padding:' + padding : '',
+      background ? 'background-color:' + background : '',
+      radius ? 'border-radius:' + radius : '',
+      border ? 'border:' + border : '',
       align ? 'align-items:' + (align === 'start' ? 'flex-start' : align === 'end' ? 'flex-end' : align) : '',
-      justify ? 'justify-content:' + (justify === 'between' ? 'space-between' : justify === 'around' ? 'space-around' : 'flex-' + justify) : ''
+      justify ? 'justify-content:' + ({ start: 'flex-start', center: 'center', end: 'flex-end', between: 'space-between', around: 'space-around', evenly: 'space-evenly' })[justify] : ''
     ].filter(Boolean).join(';');
     return '<div class="' + (name === 'flow' ? 'dil-flow' : 'dil-row') + '" style="' + style + '">' + children + '</div>';
   }
@@ -719,26 +791,57 @@ function renderElement(node, options) {
     const flex = safeFlex(attributes.flex);
     const padding = safeSpacing(attributes.padding);
     const width = safeLength(attributes.width);
+    const height = safeLength(attributes.height);
     const minWidth = safeLength(attributes.minWidth);
     const maxWidth = safeLength(attributes.maxWidth);
     const minHeight = safeLength(attributes.minHeight);
     const maxHeight = safeLength(attributes.maxHeight);
     const radius = safeLength(attributes.radius);
     const background = safeColor(attributes.background);
+    const color = safeColor(attributes.color);
+    const border = safeBorder(attributes.border);
+    const direction = attributes.direction === 'row' ? 'row' : 'column';
+    const align = safeAlign(attributes.align);
+    const justify = safeJustify(attributes.justify);
+    const wrap = attributes.wrap === false ? 'nowrap' : 'wrap';
+    const span = Math.max(1, Math.min(12, Number(attributes.span) || 1));
+    const rowSpan = Math.max(1, Math.min(12, Number(attributes.rowSpan) || 1));
     const style = [
-      'display:flex', 'flex-direction:column',
+      'display:flex', 'flex-direction:' + direction, 'flex-wrap:' + wrap,
       gap ? 'gap:' + gap : '', flex ? 'flex:' + flex : '',
       padding ? 'padding:' + padding : '', width ? 'width:' + width : '',
+      height ? 'height:' + height : '',
       minWidth ? 'min-width:' + minWidth : '', maxWidth ? 'max-width:' + maxWidth : '',
       minHeight ? 'min-height:' + minHeight : '', maxHeight ? 'max-height:' + maxHeight : '',
-      radius ? 'border-radius:' + radius : '', background ? 'background-color:' + background : ''
+      radius ? 'border-radius:' + radius : '', background ? 'background-color:' + background : '',
+      color ? 'color:' + color : '', border ? 'border:' + border : '',
+      align ? 'align-items:' + (align === 'start' ? 'flex-start' : align === 'end' ? 'flex-end' : align) : '',
+      justify ? 'justify-content:' + ({ start: 'flex-start', center: 'center', end: 'flex-end', between: 'space-between', around: 'space-around', evenly: 'space-evenly' })[justify] : '',
+      name === 'grid-item' ? 'grid-column:span ' + span + ';grid-row:span ' + rowSpan : ''
     ].filter(Boolean).join(';');
     return '<div class="dil-box ' + (name === 'card' ? 'dil-card' : '') + '" style="' + style + '">' + children + '</div>';
   }
   if (name === 'grid') {
-    const columns = Math.max(1, Math.min(6, Number(attributes.columns) || 2));
-    const gap = safeSpacing(attributes.gap) || '12px';
-    return '<div class="dil-grid" style="grid-template-columns:repeat(' + columns + ',minmax(0,1fr));gap:' + gap + '">' + children + '</div>';
+    const columns = Math.max(1, Math.min(12, Number(attributes.columns) || 2));
+    const rows = Math.max(0, Math.min(100, Number(attributes.rows) || 0));
+    const gap = safeSpacing(attributes.gap);
+    const rowGap = safeSpacing(attributes.rowGap);
+    const columnGap = safeSpacing(attributes.columnGap);
+    const width = safeLength(attributes.width);
+    const align = safeAlign(attributes.align);
+    const justify = safeJustify(attributes.justify);
+    const style = [
+      'display:grid',
+      'grid-template-columns:repeat(' + columns + ',minmax(0,1fr))',
+      rows ? 'grid-template-rows:repeat(' + rows + ',auto)' : '',
+      gap ? 'gap:' + gap : '',
+      rowGap ? 'row-gap:' + rowGap : '',
+      columnGap ? 'column-gap:' + columnGap : '',
+      width ? 'width:' + width : '',
+      align ? 'align-items:' + (align === 'start' ? 'start' : align === 'end' ? 'end' : align) : '',
+      justify ? 'justify-content:' + ({ start: 'start', center: 'center', end: 'end', between: 'space-between', around: 'space-around', evenly: 'space-evenly' })[justify] : ''
+    ].filter(Boolean).join(';');
+    return '<div class="dil-grid" style="' + style + '">' + children + '</div>';
   }
   if (name === 'blockquote') return '<blockquote class="dil-quote">' + children + '</blockquote>';
   if (name === 'list') return '<ul class="dil-list">' + children + '</ul>';
@@ -758,12 +861,44 @@ function renderElement(node, options) {
       (rowSpan > 1 ? ' rowspan="' + rowSpan + '"' : '') +
       (style ? ' style="' + style + '"' : '') + '>' + children + '</' + tag + '>';
   }
-  if (name === 'divider') return '<hr class="dil-divider"/>';
-  if (name === 'spacer') return '<span class="dil-spacer" aria-hidden="true"></span>';
-  if (name === 'text') return '<span class="dil-text">' + children + '</span>';
-  if (name === 'title') return '<h3 class="dil-title">' + children + '</h3>';
-  if (name === 'caption' || name === 'label') return '<span class="dil-caption">' + children + '</span>';
-  if (name === 'badge') return '<span class="dil-badge">' + children + '</span>';
+  if (name === 'divider') {
+    const color = safeColor(attributes.color);
+    const size = safeLength(attributes.size);
+    const style = [color ? 'border-color:' + color : '', size ? 'border-top-width:' + size : ''].filter(Boolean).join(';');
+    return '<hr class="dil-divider" style="' + style + '"/>';
+  }
+  if (name === 'spacer') {
+    const width = safeLength(attributes.width);
+    const height = safeLength(attributes.height) || safeSpacing(attributes.size);
+    const style = [width ? 'width:' + width : '', height ? 'height:' + height : ''].filter(Boolean).join(';');
+    return '<span class="dil-spacer" style="' + style + '" aria-hidden="true"></span>';
+  }
+  if (name === 'text' || name === 'title' || name === 'caption' || name === 'label' || name === 'badge') {
+    const color = safeColor(attributes.color) ||
+      ((name === 'caption' || name === 'label') ? 'var(--muted)' : '');
+    const background = safeColor(attributes.background);
+    const fontSize = safeFontSize(attributes.size) ||
+      (name === 'title' ? '1.25rem' : (name === 'caption' || name === 'label' ? '0.75rem' : ''));
+    const fontWeight = safeFontWeight(attributes.weight) ||
+      (name === 'title' || attributes.strong ? '700' : '');
+    const align = safeTextAlign(attributes.textAlign || attributes.align);
+    const style = [
+      color ? 'color:' + color : '',
+      background ? 'background-color:' + background : '',
+      fontSize ? 'font-size:' + fontSize : '',
+      fontWeight ? 'font-weight:' + fontWeight : '',
+      align ? 'text-align:' + align : '',
+      attributes.italic ? 'font-style:italic' : '',
+      attributes.underline ? 'text-decoration:underline' : '',
+      attributes.lineThrough ? 'text-decoration:line-through' : '',
+      name === 'badge' ? 'border-radius:' + (attributes.pill ? '999px' : '6px') : ''
+    ].filter(Boolean).join(';');
+    const tag = name === 'title' ? 'h3' : 'span';
+    const className = name === 'title' ? 'dil-title' :
+      name === 'caption' || name === 'label' ? 'dil-caption' :
+      name === 'badge' ? 'dil-badge' : 'dil-text';
+    return '<' + tag + ' class="' + className + '" style="' + style + '">' + children + '</' + tag + '>';
+  }
   if (name === 'bold') return '<strong>' + children + '</strong>';
   if (name === 'italic') return '<em>' + children + '</em>';
   if (name === 'underline') return '<u>' + children + '</u>';
