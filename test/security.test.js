@@ -21,10 +21,10 @@ assert.equal(markdownHelpers({ url: 'https://cdn.openai.com/image a(1).png', dis
 assert.match(tm, /function installBundledJSZip\(\)/, 'bundled JSZip should be isolated from host-page module loaders');
 assert.doesNotMatch(tm, /XMLHttpRequest\.prototype\.open|this\.getRequestHeader/, 'broken XHR header interception must be removed');
 assert.doesNotMatch(tm, /function tryCaptureToken/, 'the fetch observer must not capture bearer tokens');
-assert.doesNotMatch(tm, /j\\.__fetched_at\\s*=/, 'the original ChatGPT JSON must not be mutated with exporter metadata');
-assert.match(tm, /zip\\.file\\('manifest\\.json'/, 'every export should include a versioned manifest');
-assert.match(tm, /zip\\.file\\('diagnostics\\.json'/, 'export failures and incomplete mappings should be recorded');
-assert.match(tm, /format: 'chat-archive\\/v1'/, 'normalized archive JSON should declare its schema version');
+assert.doesNotMatch(tm, /j\.__fetched_at\s*=/, 'the original ChatGPT JSON must not be mutated with exporter metadata');
+assert.match(tm, /zip\.file\('manifest\.json'/, 'every export should include a versioned manifest');
+assert.match(tm, /zip\.file\('diagnostics\.json'/, 'export failures and incomplete mappings should be recorded');
+assert.match(tm, /format: 'chat-archive\/v1'/, 'normalized archive JSON should declare its schema version');
 assert.doesNotMatch(tm, /credentials\s*:\s*['"]include['"]/, 'asset requests must not send credentials to arbitrary origins');
 assert.doesNotMatch(tm, /sendBeacon|GM_xmlhttpRequest|WebSocket|EventSource/, 'the exporter must not add background upload or socket channels');
 
