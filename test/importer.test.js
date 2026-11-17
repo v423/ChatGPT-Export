@@ -13,6 +13,9 @@ const { replaceAssetMarkers } = require('../server/index');
 async function writeFixtureZip(filename, conversation) {
   const zip = new yazl.ZipFile();
   zip.addBuffer(Buffer.from(JSON.stringify(conversation)), 'Demo conversation.json');
+  zip.addBuffer(Buffer.from(JSON.stringify({ format: 'chat-archive/v1', schema_version: 1 })), 'manifest.json');
+  zip.addBuffer(Buffer.from(JSON.stringify({ format: 'chat-archive/v1', nodes: [] })), 'normalized/fixture-conversation.json');
+  zip.addBuffer(Buffer.from(JSON.stringify({ format: 'chat-archive-diagnostics/v1' })), 'diagnostics.json');
   zip.addBuffer(Buffer.from('sample-image-binary'), 'images/img_01_file_abc123.png');
   zip.end();
   await new Promise((resolve, reject) => {
@@ -76,6 +79,7 @@ async function main() {
 
     assert.equal(result.status, 'completed');
     assert.equal(result.conversationsAdded, 1);
+    assert.equal(result.conversationsSkipped, 0, 'manifest and normalized JSON must not be mistaken for conversations');
     assert.equal(result.messagesImported, 2);
     assert.equal(result.assetsAdded, 1);
     assert.equal(fs.existsSync(archivePath), true, 'CLI/source archives must not be deleted');

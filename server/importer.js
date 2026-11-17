@@ -90,6 +90,11 @@ function isSymlink(entry) {
   return (unixMode & 0o170000) === 0o120000;
 }
 
+function isArchiveMetadataPath(archivePath) {
+  const normalized = String(archivePath || '').replace(/\\\\/g, '/').toLowerCase();
+  return normalized === 'manifest.json' || normalized === 'diagnostics.json' || normalized.startsWith('normalized/');
+}
+
 function assetLocationForPath(archivePath) {
   const segments = archivePath.split('/');
   let folderIndex = -1;
@@ -258,7 +263,7 @@ async function importZipFile(options) {
 
           if (!entry.fileName.endsWith('/')) {
             const extension = path.extname(archiveEntryPath).toLowerCase();
-            if (extension === '.json') {
+            if (extension === '.json' && !isArchiveMetadataPath(archiveEntryPath)) {
               const buffer = await readEntryBuffer(zipfile, entry, MAX_JSON_BYTES);
               const rawSha = crypto.createHash('sha256').update(buffer).digest('hex');
               let data;
@@ -405,6 +410,7 @@ module.exports = {
   hashFile,
   safeArchivePath,
   assetLocationForPath,
+  isArchiveMetadataPath,
   MAX_ARCHIVE_ENTRIES,
   MAX_ENTRY_BYTES,
   MAX_JSON_BYTES,
