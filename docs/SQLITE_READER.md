@@ -69,6 +69,6 @@ The Mermaid renderer covers common flowchart/graph node-and-edge syntax, not the
 
 - The importer targets this exporter's ZIP layout: conversation JSON plus images/ and files/ folders. Markdown-only ZIP archives are not indexed yet.
 - A single unusually large message is still returned as one page item.
-- The new Node.js reader does not yet provide its own PDF/print export; the legacy static reader retains its print/PDF workflow.
+- The reader's Print / Save PDF action loads all older message pages before opening the browser print dialog; text remains selectable.
 - Full DIL/Mermaid parity is not claimed.
 - A 100 MB+ real-world archive benchmark and complete automated CI pass are still pending.

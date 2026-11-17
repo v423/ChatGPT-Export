@@ -207,3 +207,20 @@ button { cursor: pointer; }
 .dil-map-card ol { margin: 8px 0 0; padding-left: 20px; }
 .dil-map-card li { margin: 6px 0; }
 .dil-map-card li small { display: block; }
+
+
+@media print {
+  @page { margin: 15mm; }
+  html, body { height: auto !important; min-height: 0 !important; overflow: visible !important; background: #fff !important; color: #111 !important; }
+  .topbar, .sidebar, .conversation-actions, .older-container, .toast, .import-panel { display: none !important; }
+  .app-shell, .workspace, .reader { display: block !important; width: auto !important; height: auto !important; min-height: 0 !important; overflow: visible !important; background: #fff !important; }
+  .conversation-header { display: block !important; position: static !important; padding: 0 0 12px !important; border: 0 !important; background: #fff !important; color: #111 !important; }
+  .conversation-heading h1 { color: #111 !important; }
+  .conversation-meta { color: #555 !important; }
+  .messages { display: block !important; height: auto !important; overflow: visible !important; padding: 0 !important; background: #fff !important; }
+  .message { break-inside: avoid; page-break-inside: avoid; box-shadow: none !important; }
+  .message-content { overflow: visible !important; }
+  .dil-image img { max-height: none !important; }
+  .dil-chart, .dil-mermaid { max-width: 100% !important; min-width: 0 !important; background: #fff !important; }
+  a { color: inherit !important; text-decoration: underline; }
+}

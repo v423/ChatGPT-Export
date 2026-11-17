@@ -79,7 +79,7 @@ Each JSON file is the raw conversation data returned by ChatGPT. Each Markdown f
 
 ### Legacy Static Reader
 
-`reader/index.html` retains the original browser-only reader and IndexedDB storage. It is suitable for smaller archives; it is not recommended for daily multi-hundred-megabyte datasets. Its print/PDF workflow remains available.
+`reader/index.html` retains the original browser-only reader and IndexedDB storage. It is suitable for smaller archives; it is not recommended for daily multi-hundred-megabyte datasets. Its print/PDF workflow remains available. The Node.js reader also provides a Print / Save PDF action that loads all older pages for the selected conversation before printing.
 
 ### Tests
 

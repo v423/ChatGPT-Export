@@ -14,7 +14,8 @@
     loadingList: false,
     loadingOlder: false,
     searchTimer: 0,
-    importTimer: 0
+    importTimer: 0,
+    printing: false
   };
 
   const el = id => document.getElementById(id);
@@ -162,6 +163,7 @@
     state.nextBefore = null;
     el('emptyState').hidden = true;
     el('conversationHeader').hidden = false;
+    el('printButton').disabled = true;
     reader.hidden = false;
     reader.innerHTML = '<div class="loading-state">正在加载对话…</div>';
     el('olderContainer').hidden = true;
@@ -177,11 +179,51 @@
       el('conversationMeta').textContent =
         (result.projectTitle ? result.projectTitle + ' · ' : '') +
         formatDate(result.updatedAt) + ' · ' + result.messageCount + ' 条消息';
+      el('printButton').disabled = false;
       renderMessages();
       el('olderContainer').hidden = !state.hasOlder;
       reader.scrollTop = reader.scrollHeight;
     } catch (error) {
+      el('printButton').disabled = true;
       reader.innerHTML = '<div class="empty-list">' + escapeHtml(error.message) + '</div>';
+    }
+  }
+
+  async function printConversation() {
+    if (!state.selectedId || !state.selectedConversation || state.printing) return;
+    const button = el('printButton');
+    const originalLabel = button.textContent;
+    state.printing = true;
+    button.disabled = true;
+    let complete = true;
+    let loaded = 0;
+    try {
+      while (state.hasOlder) {
+        const before = state.messages.length ? state.messages[0].sequence : null;
+        if (before == null) { complete = false; break; }
+        const params = new URLSearchParams({ limit: '200', before: String(before) });
+        const result = await api('/api/conversations/' + encodeURIComponent(state.selectedId) + '/messages?' + params.toString());
+        const older = Array.isArray(result.items) ? result.items : [];
+        if (!older.length || older[0].sequence >= before) { complete = false; break; }
+        state.messages = older.concat(state.messages);
+        state.hasOlder = Boolean(result.hasOlder);
+        loaded += older.length;
+        button.textContent = '准备打印：已加载 ' + loaded.toLocaleString('zh-CN') + ' 条更早消息…';
+      }
+      if (!complete) {
+        showToast('未能完整读取全部历史消息，已取消 PDF 导出');
+        return;
+      }
+      renderMessages();
+      el('olderContainer').hidden = true;
+      window.print();
+    } catch (error) {
+      showToast('准备 PDF 失败：' + error.message);
+    } finally {
+      state.printing = false;
+      button.disabled = !state.selectedConversation;
+      button.textContent = originalLabel;
+      el('olderContainer').hidden = !state.hasOlder;
     }
   }
 
@@ -289,6 +331,7 @@
     refreshStats();
   });
   el('loadOlderButton').addEventListener('click', loadOlderMessages);
+  el('printButton').addEventListener('click', printConversation);
   list.addEventListener('click', event => {
     const button = event.target.closest('[data-id]');
     if (button) selectConversation(button.dataset.id);
