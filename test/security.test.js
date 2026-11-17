@@ -28,8 +28,8 @@ assert.match(tm, /zip\.file\('diagnostics\.json'/, 'export failures and incomple
 assert.match(tm, /format: 'chat-archive\/v1'/, 'normalized archive JSON should declare its schema version');
 assert.doesNotMatch(tm, /credentials\s*:\s*['"]include['"]/, 'asset requests must not send credentials to arbitrary origins');
 assert.doesNotMatch(tm, /sendBeacon|GM_xmlhttpRequest|WebSocket|EventSource/, 'the exporter must not add background upload or socket channels');
-assert.match(archiveReader, /window\\.print\\(\\)/, 'the SQLite reader should provide a selectable-text print/PDF fallback');
-assert.match(archiveReader, /while \\(state\\.hasOlder\\)/, 'PDF export must load every older message page before printing');
+assert.match(archiveReader, /window\.print\(\)/, 'the SQLite reader should provide a selectable-text print/PDF fallback');
+assert.match(archiveReader, /while \(state\.hasOlder\)/, 'PDF export must load every older message page before printing');
 
 const captureStart = tm.indexOf('(function captureWorkspaceIdsAndLocalLists()');
 const captureEnd = tm.indexOf('async function ensureAccessToken()', captureStart);

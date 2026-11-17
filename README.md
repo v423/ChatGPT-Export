@@ -18,7 +18,7 @@ It is intended for personal backups, archiving project and team-workspace conver
 ## Features
 
 - **Export scope** — personal conversations, project conversations, and team workspaces, either as a full backup or as a selected subset.
-- **Dual-format output** — every conversation is saved as both raw JSON and converted Markdown, suited to indexing and reading respectively, with project folder structure preserved.
+- **Versioned archive output** — preserve the original JSON unchanged and add `chat-archive/v1` normalized JSON plus Markdown. `manifest.json` inventories files and SHA-256 checksums; `diagnostics.json` records failed conversations, missing assets, and incomplete mappings.
 - **Asset extraction** — generated images and uploaded attachments are saved into `images/` and `files/` whenever a download URL is available in the conversation metadata.
 - **Reading and search** — the reader supports title and full-text search, message and code-block copying, image preview, and local file links.
 - **Local database** — the new reader persists conversations, messages, and search indexes in SQLite; binary assets use content-addressed files. The legacy static reader still uses IndexedDB.

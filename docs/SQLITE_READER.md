@@ -17,7 +17,7 @@
 6. Images and files are streamed to temporary files, hashed, and moved to content-addressed paths. Duplicate binary assets share one stored file.
 7. Import progress and provenance are recorded in import_jobs, import_conversations, and asset_locations.
 
-Identical completed archives are skipped. CLI imports never delete the caller's source ZIP.
+Identical completed archives are skipped. CLI imports never delete the caller's source ZIP. `manifest.json`, `diagnostics.json`, and `normalized/*.json` are archive descriptors; the reader indexes the unchanged raw conversation JSON as its source of truth.
 
 ## SQLite model
 
@@ -70,5 +70,6 @@ The Mermaid renderer covers common flowchart/graph node-and-edge syntax, not the
 - The importer targets this exporter's ZIP layout: conversation JSON plus images/ and files/ folders. Markdown-only ZIP archives are not indexed yet.
 - A single unusually large message is still returned as one page item.
 - The reader's Print / Save PDF action loads all older message pages before opening the browser print dialog; text remains selectable.
+- API completeness checks detect broken mapping references. DOM auto-scroll fallback is only possible when the incomplete conversation is already open in the ChatGPT tab; otherwise the archive records an incomplete status.
 - Full DIL/Mermaid parity is not claimed.
 - A 100 MB+ real-world archive benchmark and complete automated CI pass are still pending.
